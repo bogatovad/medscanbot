@@ -3,9 +3,11 @@ services:
   backend:
     build: .
     container_name: med_scan_backend
-    command: /boot.sh
+    command: fastapi run main.py --port 8000 --reload
     volumes:
       - .:/opt/services/app/src:Z
+    env_file:
+      - .env
     expose:
       - 8000
     ports:

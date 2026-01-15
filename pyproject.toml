@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "savetok"
+name = "med_scan_bot"
 version = "0.1.0"
 description = ""
 authors = ["Rustam <rustam.95.ur@gmail.com>"]
@@ -15,6 +15,7 @@ alembic = "^1.15.2"
 asyncpg = "^0.30.0"
 sqlalchemy = {extras = ["asyncio", "greenlet"], version = "^2.0.40"}
 httpx = "^0.28.1"
+maxapi = {extras = ["webhook"], version = "^0.9.12"}
 
 
 [tool.poetry.group.dev.dependencies]

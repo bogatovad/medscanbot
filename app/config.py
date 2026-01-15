@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     INFOCLINICA_TIMEOUT_SECONDS: float = 30.0
     INFOCLINICA_COOKIES: str = ""
 
+    MAX_BOT_TOKEN: str = ""
+
     model_config = SettingsConfigDict(env_file="../.env")
 
 
