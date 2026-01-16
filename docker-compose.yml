@@ -15,32 +15,40 @@ services:
     networks:
       - redis_network
       - database_network
-    depends_on:
-      - redis
-
-  redis:
-    image: redis:latest
-    container_name: med_scan_redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+  bot:
+    build: .
+    command: poetry run python /opt/app/bot/polling.py
     volumes:
-      - redis_volume:/data
+      - .:/opt:Z
+    env_file:
+      - .env
     networks:
       - redis_network
-
-  postgres:
-    image: postgres:15
-    container_name: med_scan_postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: med_scan
-    volumes:
-      - db:/var/lib/postgresql/data
-    networks:
       - database_network
+
+#  redis:
+#    image: redis:latest
+#    container_name: med_scan_redis
+#    ports:
+#      - "${REDIS_PORT:-6379}:6379"
+#    volumes:
+#      - redis_volume:/data
+#    networks:
+#      - redis_network
+#
+#  postgres:
+#    image: postgres:15
+#    container_name: med_scan_postgres
+#    ports:
+#      - "5432:5432"
+#    environment:
+#      POSTGRES_USER: user
+#      POSTGRES_PASSWORD: password
+#      POSTGRES_DB: med_scan
+#    volumes:
+#      - db:/var/lib/postgresql/data
+#    networks:
+#      - database_network
 
 networks:
   redis_network:
