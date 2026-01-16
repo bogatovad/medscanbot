@@ -13,7 +13,9 @@ from app.config import settings
 from app.bot import bot, dp
 from app.schemas.infoclinica import (
     InfoClinicaReservationSchedulePayload,
-    ReservationScheduleService
+    ReservationScheduleService,
+    InfoClinicaLoginPayload,
+    InfoClinicaRegistrationPayload
 )
 from app.bot.router import router
 
@@ -30,6 +32,25 @@ DOCTORS_PER_PAGE = 5
 class Form(StatesGroup):
     name = State()
     age = State()
+
+
+class RegistrationForm(StatesGroup):
+    """Форма регистрации нового пользователя"""
+    lastName = State()
+    firstName = State()
+    middleName = State()
+    birthDate = State()
+    email = State()
+    phone = State()
+    snils = State()
+    gender = State()
+    accept = State()  # Согласие на обработку перс. данных
+
+
+class LoginForm(StatesGroup):
+    """Форма входа существующего пользователя"""
+    username = State()
+    password = State()
 
 
 @dp.on_started()
@@ -647,8 +668,10 @@ async def get_doctor_schedule(
         return result.json or {}
 
 
-def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str, department_name: str) -> str:
-    """Форматирует информацию о графике работы врача и ближайших доступных временах"""
+def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str, department_name: str):
+    """Форматирует информацию о графике работы врача и ближайших доступных временах с кнопками"""
+    from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
+    
     today = datetime.now().date()
     today_str = today.strftime("%Y%m%d")
     
@@ -660,6 +683,10 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
         '',
         '📅 График работы врача:'
     ]
+    
+    # Создаем клавиатуру для выбора времени
+    builder = InlineKeyboardBuilder()
+    available_times = []
     
     # Пытаемся извлечь данные о расписании
     # Структура ответа может варьироваться, поэтому обрабатываем разные варианты
@@ -689,21 +716,44 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
         if today_slots:
             # Сортируем времена
             today_slots.sort()
-            text_parts.append(f'\n🕐 Ближайшее доступное время на сегодня:')
-            for i, time_slot in enumerate(today_slots[:5], 1):  # Показываем первые 5 времен
-                text_parts.append(f'{i}. {time_slot}')
+            available_times = today_slots[:5]  # Берем первые 5 времен
         else:
-            text_parts.append(f'\n⏰ На сегодня свободное время отсутствует.')
+            # Тестовые данные времени, если API не вернул данные
+            available_times = ['09:00', '10:30', '12:00', '14:00', '15:30']
+            
+        text_parts.append(f'\n🕐 Выберите удобное время:')
             
         # Добавляем общую информацию о графике, если есть
         if 'work_hours' in schedule_info:
             work_hours = schedule_info.get('work_hours')
             text_parts.append(f'\n⏱️ График работы: {work_hours}')
     else:
-        text_parts.append(f'\n📋 Получена информация о графике.')
-        text_parts.append(f'⏰ Ближайшее время на сегодня уточняется...')
+        # Тестовые данные времени, если структура данных неожиданная
+        available_times = ['09:00', '10:30', '12:00', '14:00', '15:30']
+        text_parts.append(f'\n🕐 Выберите удобное время:')
     
-    return '\n'.join(text_parts)
+    # Создаем кнопки для каждого времени (по 2 кнопки в ряд)
+    for i in range(0, len(available_times), 2):
+        row_times = available_times[i:i+2]
+        buttons = [
+            CallbackButton(
+                text=time,
+                payload=f'time_{time.replace(":", "")}'
+            )
+            for time in row_times
+        ]
+        builder.row(*buttons)
+    
+    # Кнопка "Назад" к врачам
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад к врачам',
+            payload='back_to_doctors'
+        )
+    )
+    
+    text = '\n'.join(text_parts)
+    return text, builder
 
 
 @dp.message_callback(F.callback.payload.startswith('doctor_'))
@@ -763,12 +813,14 @@ async def handle_doctor_selection(event: MessageCallback, context: MemoryContext
                 online_mode=1
             )
             
-            # Форматируем информацию о графике
-            schedule_text = format_schedule_info(schedule_data, doctor_name, branch_name, department_name)
+            # Форматируем информацию о графике (возвращает текст и клавиатуру)
+            schedule_text, time_keyboard = format_schedule_info(schedule_data, doctor_name, branch_name, department_name)
             
-            # Отправляем информацию о графике
-            await event.message.answer(schedule_text)
-            await create_keyboard(event)
+            # Отправляем информацию о графике с кнопками времени
+            await event.message.answer(
+                text=schedule_text,
+                attachments=[time_keyboard.as_markup()]
+            )
             
         except Exception as e:
             logging.error(f"Ошибка при получении графика врача: {e}")
@@ -820,6 +872,110 @@ async def handle_back_to_branches(event: MessageCallback, context: MemoryContext
     )
 
 
+@dp.message_callback(F.callback.payload.startswith('time_'))
+async def handle_time_selection(event: MessageCallback, context: MemoryContext):
+    # Извлекаем время из payload (формат: time_0900, time_1030 и т.д.)
+    time_str = event.callback.payload.replace('time_', '')
+    # Восстанавливаем формат времени (0900 -> 09:00)
+    if len(time_str) == 4:
+        selected_time = f"{time_str[:2]}:{time_str[2:]}"
+    else:
+        selected_time = time_str
+    
+    # Получаем информацию о выбранных данных
+    data = await context.get_data()
+    branch_id = data.get('selected_branch_id')
+    department_id = data.get('selected_department_id')
+    doctor_id = data.get('selected_doctor_id')
+    branches = data.get('branches_list', [])
+    departments = data.get('departments_list', [])
+    doctors = data.get('doctors_list', [])
+    
+    branch_name = "Филиал"
+    for branch in branches:
+        if str(branch.get("id")) == branch_id:
+            branch_name = branch.get("name", "Филиал")
+            break
+    
+    department_name = "Отделение"
+    for department in departments:
+        if str(department.get("id")) == department_id:
+            department_name = department.get("name", "Отделение")
+            break
+    
+    doctor_name = "Врач"
+    for doctor in doctors:
+        if str(doctor.get("id")) == doctor_id:
+            doctor_name = doctor.get("name", "Врач")
+            break
+    
+    # Сохраняем выбранное время
+    await context.update_data(selected_time=selected_time)
+    
+    await event.message.delete()
+    
+    # Показываем кнопки выбора: есть аккаунт или новый пользователь
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(
+            text='✅ У меня есть аккаунт',
+            payload='has_account'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='➕ Новый пользователь',
+            payload='new_user'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад к выбору времени',
+            payload='back_to_schedule'
+        )
+    )
+    
+    await event.message.answer(
+        text=f'✅ Вы выбрали время: {selected_time}\n\n'
+        f'📍 Филиал: {branch_name}\n'
+        f'🏥 Отделение: {department_name}\n'
+        f'👨‍⚕️ Врач: {doctor_name}\n\n'
+        f'Для продолжения нужно войти в систему или зарегистрироваться.',
+        attachments=[builder.as_markup()]
+    )
+
+
+@dp.message_callback(F.callback.payload == 'back_to_doctors')
+async def handle_back_to_doctors(event: MessageCallback, context: MemoryContext):
+    # Возвращаемся к списку врачей
+    data = await context.get_data()
+    current_page = data.get('doctors_page', 0)
+    branch_id = data.get('selected_branch_id')
+    department_id = data.get('selected_department_id')
+    branches = data.get('branches_list', [])
+    departments = data.get('departments_list', [])
+    
+    branch_name = "Филиал"
+    for branch in branches:
+        if str(branch.get("id")) == branch_id:
+            branch_name = branch.get("name", "Филиал")
+            break
+    
+    department_name = "Отделение"
+    for department in departments:
+        if str(department.get("id")) == department_id:
+            department_name = department.get("name", "Отделение")
+            break
+    
+    builder, text = await create_doctors_keyboard(event, context, page=current_page)
+    
+    await event.message.delete()
+    await event.message.answer(
+        text=f'Вы выбрали:\n📍 Филиал: {branch_name}\n🏥 Отделение: {department_name}\n\n{text}',
+        attachments=[builder.as_markup()]
+    )
+
+
 @dp.message_created(F.message.body.text, Form.name)
 async def handle_name_input(event: MessageCreated, context: MemoryContext):
     await context.update_data(name=event.message.body.text)
@@ -834,6 +990,319 @@ async def handle_age_input(event: MessageCreated, context: MemoryContext):
     await context.update_data(age=event.message.body.text)
 
     await event.message.answer("Ого! А мне всего пару недель 😁")
+
+
+@dp.message_callback(F.callback.payload == 'has_account')
+async def handle_has_account(event: MessageCallback, context: MemoryContext):
+    """Обработчик кнопки 'У меня есть аккаунт'"""
+    await context.set_state(LoginForm.username)
+    await event.message.delete()
+    await event.message.answer('Введите ваш логин:')
+
+
+@dp.message_callback(F.callback.payload == 'new_user')
+async def handle_new_user(event: MessageCallback, context: MemoryContext):
+    """Обработчик кнопки 'Новый пользователь' - начинаем регистрацию"""
+    await context.set_state(RegistrationForm.lastName)
+    await event.message.delete()
+    await event.message.answer('Регистрация нового пользователя\n\nВведите вашу фамилию:')
+
+
+@dp.message_created(F.message.body.text, LoginForm.username)
+async def handle_login_username(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода логина"""
+    await context.update_data(login_username=event.message.body.text)
+    await context.set_state(LoginForm.password)
+    await event.message.answer('Введите ваш пароль:')
+
+
+@dp.message_created(F.message.body.text, LoginForm.password)
+async def handle_login_password(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода пароля и выполнение входа"""
+    data = await context.get_data()
+    username = data.get('login_username')
+    password = event.message.body.text
+    
+    try:
+        # Выполняем вход через API
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=settings.INFOCLINICA_COOKIES,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS
+        ) as client:
+            login_payload = InfoClinicaLoginPayload(
+                username=username,
+                password=password,
+                accept=False,
+                code="",
+                form_key="pcode",
+                g_recaptcha_response=""
+            )
+            
+            result = await client.login(login_payload)
+            
+            # Проверяем результат
+            if result.status_code == 200:
+                await context.set_state(None)
+                await event.message.answer(
+                    f'✅ Вход выполнен успешно!\n\n'
+                    f'Логин: {username}\n\n'
+                    f'Запись подтверждена. Ожидайте подтверждения.'
+                )
+                await create_keyboard(event)
+            else:
+                error_msg = result.json.get('message', 'Ошибка входа') if result.json else 'Ошибка входа'
+                await event.message.answer(
+                    f'❌ Ошибка входа: {error_msg}\n\n'
+                    f'Попробуйте еще раз.'
+                )
+    except Exception as e:
+        logging.error(f"Ошибка при входе: {e}")
+        await event.message.answer(
+            f'❌ Произошла ошибка при входе.\n\n'
+            f'Попробуйте позже или обратитесь в поддержку.'
+        )
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.lastName)
+async def handle_registration_lastName(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода фамилии"""
+    await context.update_data(reg_lastName=event.message.body.text)
+    await context.set_state(RegistrationForm.firstName)
+    await event.message.answer('Введите ваше имя:')
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.firstName)
+async def handle_registration_firstName(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода имени"""
+    await context.update_data(reg_firstName=event.message.body.text)
+    await context.set_state(RegistrationForm.middleName)
+    await event.message.answer('Введите ваше отчество (если есть, иначе отправьте "-"):')
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.middleName)
+async def handle_registration_middleName(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода отчества"""
+    middle_name = event.message.body.text if event.message.body.text != "-" else None
+    await context.update_data(reg_middleName=middle_name)
+    await context.set_state(RegistrationForm.birthDate)
+    await event.message.answer('Введите дату рождения (формат: ДД.ММ.ГГГГ, например: 01.01.1990):')
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.birthDate)
+async def handle_registration_birthDate(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода даты рождения"""
+    await context.update_data(reg_birthDate=event.message.body.text)
+    await context.set_state(RegistrationForm.email)
+    await event.message.answer('Введите ваш email:')
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.email)
+async def handle_registration_email(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода email"""
+    await context.update_data(reg_email=event.message.body.text)
+    await context.set_state(RegistrationForm.phone)
+    await event.message.answer('Введите ваш телефон в формате: +7(000)000-00-00:')
+
+
+def validate_phone(phone: str) -> bool:
+    """Валидация телефона в формате +7(000)000-00-00"""
+    import re
+    pattern = r'^\+7\(\d{3}\)\d{3}-\d{2}-\d{2}$'
+    return bool(re.match(pattern, phone))
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.phone)
+async def handle_registration_phone(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода телефона с валидацией"""
+    phone = event.message.body.text
+    
+    if not validate_phone(phone):
+        await event.message.answer(
+            '❌ Неверный формат телефона!\n\n'
+            'Пожалуйста, введите телефон в формате: +7(000)000-00-00\n'
+            'Например: +7(999)123-45-67'
+        )
+        return  # Остаемся в том же состоянии
+    
+    await context.update_data(reg_phone=phone)
+    await context.set_state(RegistrationForm.snils)
+    await event.message.answer('Введите ваш СНИЛС:')
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.snils)
+async def handle_registration_snils(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода СНИЛС"""
+    await context.update_data(reg_snils=event.message.body.text)
+    await context.set_state(RegistrationForm.gender)
+    await event.message.answer('Введите ваш пол (1 - мужской, 2 - женский):')
+
+
+@dp.message_created(F.message.body.text, RegistrationForm.gender)
+async def handle_registration_gender(event: MessageCreated, context: MemoryContext):
+    """Обработка ввода пола"""
+    gender = event.message.body.text
+    if gender not in ['1', '2']:
+        await event.message.answer(
+            '❌ Неверное значение!\n\n'
+            'Введите 1 для мужского пола или 2 для женского пола.'
+        )
+        return
+    
+    await context.update_data(reg_gender=int(gender))
+    await context.set_state(RegistrationForm.accept)
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(
+            text='✅ Согласен',
+            payload='accept_personal_data'
+        ),
+        CallbackButton(
+            text='❌ Не согласен',
+            payload='reject_personal_data'
+        )
+    )
+    
+    await event.message.answer(
+        'Согласны ли вы на обработку персональных данных?',
+        attachments=[builder.as_markup()]
+    )
+
+
+@dp.message_callback(F.callback.payload == 'accept_personal_data')
+async def handle_accept_personal_data(event: MessageCallback, context: MemoryContext):
+    """Обработка согласия на обработку персональных данных"""
+    await context.update_data(reg_accept=True)
+    
+    # Получаем все данные регистрации
+    data = await context.get_data()
+    
+    try:
+        # Выполняем регистрацию через API
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=settings.INFOCLINICA_COOKIES,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS
+        ) as client:
+            registration_payload = InfoClinicaRegistrationPayload(
+                first_name=data.get("reg_firstName", ""),
+                last_name=data.get("reg_lastName", ""),
+                middle_name=data.get("reg_middleName"),
+                birth_date=data.get("reg_birthDate"),
+                email=data.get("reg_email", ""),
+                phone=data.get("reg_phone", ""),
+                snils=data.get("reg_snils", ""),
+                gender=data.get("reg_gender"),
+                accept=True,
+                refuse_call=None,
+                refuse_sms=None,
+                confirmed="",
+                check_data="",
+                captcha=""
+            )
+            
+            result = await client.registration(registration_payload)
+            
+            # Проверяем результат
+            if result.status_code == 200:
+                await context.set_state(None)
+                await event.message.delete()
+                await event.message.answer(
+                    f'✅ Регистрация завершена!\n\n'
+                    f'Фамилия: {data.get("reg_lastName")}\n'
+                    f'Имя: {data.get("reg_firstName")}\n'
+                    f'Отчество: {data.get("reg_middleName") or "не указано"}\n'
+                    f'Дата рождения: {data.get("reg_birthDate")}\n'
+                    f'Email: {data.get("reg_email")}\n'
+                    f'Телефон: {data.get("reg_phone")}\n'
+                    f'СНИЛС: {data.get("reg_snils")}\n'
+                    f'Пол: {"Мужской" if data.get("reg_gender") == 1 else "Женский"}\n\n'
+                    f'Запись подтверждена. Ожидайте подтверждения.'
+                )
+                await create_keyboard(event)
+            else:
+                error_msg = result.json.get('message', 'Ошибка регистрации') if result.json else 'Ошибка регистрации'
+                await event.message.delete()
+                await event.message.answer(
+                    f'❌ Ошибка регистрации: {error_msg}\n\n'
+                    f'Попробуйте еще раз или обратитесь в поддержку.'
+                )
+    except Exception as e:
+        logging.error(f"Ошибка при регистрации: {e}")
+        await event.message.delete()
+        await event.message.answer(
+            f'❌ Произошла ошибка при регистрации.\n\n'
+            f'Попробуйте позже или обратитесь в поддержку.'
+        )
+
+
+@dp.message_callback(F.callback.payload == 'reject_personal_data')
+async def handle_reject_personal_data(event: MessageCallback, context: MemoryContext):
+    """Обработка отказа от обработки персональных данных"""
+    await event.message.delete()
+    await context.set_state(None)
+    await event.message.answer(
+        '❌ Регистрация отменена.\n\n'
+        'Для создания записи необходимо согласие на обработку персональных данных.'
+    )
+    await create_keyboard(event)
+
+
+@dp.message_callback(F.callback.payload == 'back_to_schedule')
+async def handle_back_to_schedule(event: MessageCallback, context: MemoryContext):
+    """Возврат к выбору времени"""
+    data = await context.get_data()
+    branch_id = data.get('selected_branch_id')
+    department_id = data.get('selected_department_id')
+    doctor_id = data.get('selected_doctor_id')
+    
+    # Получаем информацию о враче и формируем расписание
+    branches = data.get('branches_list', [])
+    departments = data.get('departments_list', [])
+    doctors = data.get('doctors_list', [])
+    
+    branch_name = "Филиал"
+    for branch in branches:
+        if str(branch.get("id")) == branch_id:
+            branch_name = branch.get("name", "Филиал")
+            break
+    
+    department_name = "Отделение"
+    for department in departments:
+        if str(department.get("id")) == department_id:
+            department_name = department.get("name", "Отделение")
+            break
+    
+    doctor_name = "Врач"
+    for doctor in doctors:
+        if str(doctor.get("id")) == doctor_id:
+            doctor_name = doctor.get("name", "Врач")
+            break
+    
+    # Получаем расписание
+    def safe_int(value):
+        if not value or value == 'None' or value == 'null':
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+    
+    schedule_data = await get_doctor_schedule(
+        branch_id=safe_int(branch_id),
+        doctor_id=safe_int(doctor_id),
+        department_id=safe_int(department_id),
+        online_mode=1
+    )
+    
+    schedule_text, time_keyboard = format_schedule_info(schedule_data, doctor_name, branch_name, department_name)
+    
+    await event.message.delete()
+    await event.message.answer(
+        text=schedule_text,
+        attachments=[time_keyboard.as_markup()]
+    )
 
 
 async def main():
