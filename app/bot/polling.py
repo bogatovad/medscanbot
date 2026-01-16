@@ -297,7 +297,7 @@ async def get_departments(filial_id: int | None = None):
     ) as client:
         params = {}
         if filial_id:
-            params["filial"] = filial_id
+            params["f"] = filial_id
         
         result = await client.reservation_departments(params=params if params else None)
         data = result.json or {}
