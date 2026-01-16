@@ -164,13 +164,30 @@ class InfoClinicaReservationReservePayload(BaseModel):
         return self.model_dump(by_alias=True, exclude_none=False)
 
 
+class ReservationScheduleService(BaseModel):
+    """
+    Service item for reservation schedule payload.
+    """
+    st: int = 0
+    en: int = 0
+    doctor: int = 0
+    cashList: int = 0
+    specList: int = 0
+    filialId: int = 0
+    onlineMode: int = 0
+    nsp: str = ""
+
+    def to_json(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=True, exclude_none=False)
+
+
 class InfoClinicaReservationSchedulePayload(BaseModel):
     """
     Payload for POST /api/reservation/schedule (application/json).
-    Example: {"services":[]}
+    Example: {"services":[{"st":0,"en":0,"doctor":0,"cashList":0,"specList":0,"filialId":0,"onlineMode":0,"nsp":""}]}
     """
 
-    services: list[Any] = []
+    services: list[ReservationScheduleService] = []
 
     def to_json(self) -> dict[str, Any]:
         return self.model_dump(by_alias=True, exclude_none=False)
