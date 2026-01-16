@@ -14,7 +14,6 @@ from app.bot.router import router
 logging.basicConfig(level=logging.INFO)
 dp.include_routers(router)
 
-
 start_text = '''Чат-бота Medscan 💙'''
 
 
@@ -24,12 +23,12 @@ class Form(StatesGroup):
 
 
 @dp.on_started()
-async def _():
+async def on_bot_started():
     logging.info('Бот стартовал!')
 
 
 @dp.bot_started()
-async def bot_started(event: BotStarted):
+async def handle_bot_started(event: BotStarted):
     await event.bot.send_message(
         chat_id=event.chat_id,
         text='Привет! Отправь мне /start'
@@ -37,48 +36,44 @@ async def bot_started(event: BotStarted):
 
 
 @dp.message_created(Command('clear'))
-async def hello(event: MessageCreated, context: MemoryContext):
+async def handle_clear_command(event: MessageCreated, context: MemoryContext):
     await context.clear()
-    await event.message.answer(f"Ваш контекст был очищен!")
+    await event.message.answer("Ваш контекст был очищен!")
 
 
 @dp.message_created(Command('data'))
-async def hello(event: MessageCreated, context: MemoryContext):
+async def handle_data_command(event: MessageCreated, context: MemoryContext):
     data = await context.get_data()
     await event.message.answer(f"Ваша контекстная память: {str(data)}")
 
 
 @dp.message_created(Command('context'))
 @dp.message_created(Command('state'))
-async def hello(event: MessageCreated, context: MemoryContext):
+async def handle_state_command(event: MessageCreated, context: MemoryContext):
     data = await context.get_state()
     await event.message.answer(f"Ваше контекстное состояние: {str(data)}")
 
 
 @dp.message_created(Command('start'))
-async def hello(event: MessageCreated):
+async def handle_start_command(event: MessageCreated):
     builder = InlineKeyboardBuilder()
 
     builder.row(
         CallbackButton(
-            text='Список отделений',
-            payload='btn_1'
-        ),
-        CallbackButton(
-            text='Список врачей',
-            payload='btn_2'
+            text='📅 Текущая запись',
+            payload='btn_current_appointment'
         )
     )
     builder.row(
         CallbackButton(
-            text='Филиалы',
-            payload='btn_3'
+            text='➕ Записаться на прием',
+            payload='btn_make_appointment'
         )
     )
     builder.row(
         CallbackButton(
-            text='Информация о Медскан',
-            payload='btn_4'
+            text='ℹ️ Информация о Медскан',
+            payload='btn_info'
         )
     )
 
@@ -89,62 +84,26 @@ async def hello(event: MessageCreated):
         ]
     )
 
-
-@dp.message_callback(F.callback.payload == 'btn_1')
-async def hello(event: MessageCallback, context: MemoryContext):
-    client = HttpClient()
-    data = await client.get("https://demo.infoclinica.ru/specialists/departments")
-    departments = [dep.get("name") for dep in data.get("data")]
-    await context.set_state(Form.name)
-    await event.message.delete()
-    await event.message.answer(f'{"\n".join(departments)}')
-
-    await create_keyboard(event)
-
-
-@dp.message_callback(F.callback.payload == 'btn_2')
-async def hello(event: MessageCallback, context: MemoryContext):
-    client = HttpClient()
-    data = await client.get("https://demo.infoclinica.ru/specialists/doctors")
-    docs = [f"{dep.get("name")}" for dep in data.get("data")]
-    await context.set_state(Form.age)
-    await event.message.delete()
-    await event.message.answer(f'{"\n".join(docs)}')
-    await create_keyboard(event)
-
-
-@dp.message_callback(F.callback.payload == 'btn_3')
-async def hello(event: MessageCallback, context: MemoryContext):
-    client = HttpClient()
-    data = await client.get("https://demo.infoclinica.ru/filials/list")
-    fil = [f"{dep.get("name")}" for dep in data.get("data")]
-    await event.message.delete()
-    await event.message.answer(f'{"\n".join(fil)}')
-    await create_keyboard(event)
 
 async def create_keyboard(event):
     builder = InlineKeyboardBuilder()
 
     builder.row(
         CallbackButton(
-            text='Список отделений',
-            payload='btn_1'
-        ),
-        CallbackButton(
-            text='Список врачей',
-            payload='btn_2'
+            text='📅 Текущая запись',
+            payload='btn_current_appointment'
         )
     )
     builder.row(
         CallbackButton(
-            text='Филиалы',
-            payload='btn_3'
+            text='➕ Записаться на прием',
+            payload='btn_make_appointment'
         )
     )
     builder.row(
         CallbackButton(
-            text='Информация о Медскан',
-            payload='btn_4'
+            text='ℹ️ Информация о Медскан',
+            payload='btn_info'
         )
     )
 
@@ -155,14 +114,35 @@ async def create_keyboard(event):
         ]
     )
 
-@dp.message_callback(F.callback.payload == 'btn_4')
-async def hello(event: MessageCallback, context: MemoryContext):
+
+@dp.message_callback(F.callback.payload == 'btn_info')
+async def handle_info_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
-    await event.message.answer(f'АО «Медскан» – динамично развивающаяся группа компаний и один из лидеров негосударственного сектора здравоохранения в России. Медицинские учреждения холдинга предлагают полный спектр высокотехнологичной медицинской помощи по передовым мировым протоколам')
+    await event.message.answer(
+        'АО «Медскан» – динамично развивающаяся группа компаний и один из лидеров '
+        'негосударственного сектора здравоохранения в России. Медицинские '
+        'учреждения холдинга предлагают полный спектр высокотехнологичной '
+        'медицинской помощи по передовым мировым протоколам'
+    )
     await create_keyboard(event)
 
+
+@dp.message_callback(F.callback.payload == 'btn_current_appointment')
+async def handle_current_appointment_button(event: MessageCallback, context: MemoryContext):
+    await event.message.delete()
+    await event.message.answer('Функция "Текущая запись" в разработке')
+    await create_keyboard(event)
+
+
+@dp.message_callback(F.callback.payload == 'btn_make_appointment')
+async def handle_make_appointment_button(event: MessageCallback, context: MemoryContext):
+    await event.message.delete()
+    await event.message.answer('Функция "Записаться на прием" в разработке')
+    await create_keyboard(event)
+
+
 @dp.message_created(F.message.body.text, Form.name)
-async def hello(event: MessageCreated, context: MemoryContext):
+async def handle_name_input(event: MessageCreated, context: MemoryContext):
     await context.update_data(name=event.message.body.text)
 
     data = await context.get_data()
@@ -171,10 +151,10 @@ async def hello(event: MessageCreated, context: MemoryContext):
 
 
 @dp.message_created(F.message.body.text, Form.age)
-async def hello(event: MessageCreated, context: MemoryContext):
+async def handle_age_input(event: MessageCreated, context: MemoryContext):
     await context.update_data(age=event.message.body.text)
 
-    await event.message.answer(f"Ого! А мне всего пару недель 😁")
+    await event.message.answer("Ого! А мне всего пару недель 😁")
 
 
 async def main():

@@ -17,6 +17,7 @@ services:
       - database_network
   bot:
     build: .
+    container_name: med_scan_bot
     command: poetry run python /opt/app/bot/polling.py
     volumes:
       - .:/opt:Z

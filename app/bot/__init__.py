@@ -1,7 +1,6 @@
 import logging
 
 from maxapi import Bot, Dispatcher
-from maxapi.types import BotStarted, Command, MessageCreated
 
 from app.config import settings
 
