@@ -807,23 +807,32 @@ class InfoClinicaClient:
 
     async def reservation_schedule(
         self,
-        payload: InfoClinicaReservationSchedulePayload,
+        payload: InfoClinicaReservationSchedulePayload | None = None,
         *,
         params: dict[str, Any] | None = None,
+        use_get: bool = False,
         raise_for_status: bool = False,
     ) -> InfoClinicaHttpResult:
         """
-        POST /api/reservation/schedule with JSON body.
-        Curl uses body: {"services":[]}
+        POST /api/reservation/schedule with JSON body (default)
+        or GET /api/reservation/schedule with query parameters (if use_get=True)
         """
 
-        body = payload.to_json()
+        if use_get:
+            # GET запрос с query параметрами
+            resp = await self._client_json.get(
+                "/api/reservation/schedule",
+                params=params or {},
+            )
+        else:
+            # POST запрос с JSON body
+            body = payload.to_json() if payload else {}
 
-        resp = await self._client_json.post(
-            "/api/reservation/schedule",
-            params=params or {},
-            json=body,
-        )
+            resp = await self._client_json.post(
+                "/api/reservation/schedule",
+                params=params or {},
+                json=body,
+            )
         if raise_for_status:
             resp.raise_for_status()
 

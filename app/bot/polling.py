@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from maxapi import F
 from maxapi.context import MemoryContext, State, StatesGroup
@@ -12,8 +12,6 @@ from app.providers.infoclinica_client import InfoClinicaClient
 from app.config import settings
 from app.bot import bot, dp
 from app.schemas.infoclinica import (
-    InfoClinicaReservationSchedulePayload,
-    ReservationScheduleService,
     InfoClinicaLoginPayload,
     InfoClinicaRegistrationPayload
 )
@@ -411,7 +409,8 @@ async def handle_branch_selection(event: MessageCallback, context: MemoryContext
             departments_cached_branch_id=None,
             doctors_list=None,
             doctors_page=0,
-            doctors_cached_branch_id=None
+            doctors_cached_branch_id=None,
+            doctors_cached_department_id=None
         )
         
         branch_name = selected_branch.get("name", "Филиал")
@@ -453,8 +452,8 @@ async def handle_departments_pagination(event: MessageCallback, context: MemoryC
     )
 
 
-async def get_doctors(filial_id: int | None = None):
-    """Получает список всех врачей с фильтрацией по филиалу"""
+async def get_doctors(filial_id: int | None = None, department_id: int | None = None):
+    """Получает список всех врачей с фильтрацией по филиалу и отделению"""
     async with InfoClinicaClient(
         base_url=settings.INFOCLINICA_BASE_URL,
         cookies=settings.INFOCLINICA_COOKIES,
@@ -463,10 +462,18 @@ async def get_doctors(filial_id: int | None = None):
         params = {}
         if filial_id:
             params["filial"] = filial_id
+        if department_id:
+            params["departments"] = department_id
         
         result = await client.sdk_specialists_doctors(params=params if params else None)
         data = result.json or {}
-        return data.get("data", [])
+        doctors = data.get("data", [])
+        
+        # Логируем структуру данных для отладки
+        if doctors:
+            logging.info(f"Получены врачи: filial={filial_id}, departments={department_id}, первый врач = {doctors[0] if doctors else None}")
+        
+        return doctors
 
 
 async def create_doctors_keyboard(event, context: MemoryContext, page: int = 0):
@@ -475,16 +482,20 @@ async def create_doctors_keyboard(event, context: MemoryContext, page: int = 0):
     data = await context.get_data()
     doctors = data.get('doctors_list')
     branch_id = data.get('selected_branch_id')
+    department_id = data.get('selected_department_id')
     cached_branch_id = data.get('doctors_cached_branch_id')
+    cached_department_id = data.get('doctors_cached_department_id')
     
-    # Если кеш отсутствует или филиал изменился, загружаем заново
-    if not doctors or cached_branch_id != branch_id:
+    # Если кеш отсутствует или филиал/отделение изменилось, загружаем заново
+    if not doctors or cached_branch_id != branch_id or cached_department_id != department_id:
         filial_id = int(branch_id) if branch_id else None
-        doctors = await get_doctors(filial_id=filial_id)
+        dept_id = int(department_id) if department_id else None
+        doctors = await get_doctors(filial_id=filial_id, department_id=dept_id)
         await context.update_data(
             doctors_list=doctors,
             doctors_page=0,
-            doctors_cached_branch_id=branch_id
+            doctors_cached_branch_id=branch_id,
+            doctors_cached_department_id=department_id
         )
     
     total_doctors = len(doctors)
@@ -507,14 +518,15 @@ async def create_doctors_keyboard(event, context: MemoryContext, page: int = 0):
     
     # Добавляем кнопки с врачами
     for doctor in page_doctors:
-        doctor_id = doctor.get("id")
+        # Используем dcode для идентификации врача (так как id может отсутствовать)
+        doctor_dcode = doctor.get("dcode")
         doctor_name = doctor.get("name", "Без названия")
         # Ограничиваем длину названия для кнопки
         button_text = doctor_name[:30] + "..." if len(doctor_name) > 30 else doctor_name
         builder.row(
             CallbackButton(
                 text=button_text,
-                payload=f'doctor_{doctor_id}'
+                payload=f'doctor_{doctor_dcode}'
             )
         )
     
@@ -569,8 +581,12 @@ async def handle_department_selection(event: MessageCallback, context: MemoryCon
     
     if selected_department:
         await context.update_data(selected_department_id=department_id)
-        # Очищаем предыдущие данные о врачах
-        await context.update_data(doctors_list=None, doctors_page=0)
+        # Очищаем предыдущие данные о врачах (так как отделение изменилось)
+        await context.update_data(
+            doctors_list=None,
+            doctors_page=0,
+            doctors_cached_department_id=None
+        )
         
         department_name = selected_department.get("name", "Отделение")
         
@@ -631,40 +647,41 @@ async def handle_doctors_pagination(event: MessageCallback, context: MemoryConte
 
 
 async def get_doctor_schedule(
-    branch_id: int | None = None,
-    doctor_id: int | None = None,
-    department_id: int | None = None,
+    doctor_dcode: int | str | None = None,
+    filial_id: int | str | None = None,
     online_mode: int = 1
 ):
-    """Получает график работы врача через API reservation/schedule"""
+    """Получает график работы врача через API reservation/schedule с GET запросом"""
     async with InfoClinicaClient(
         base_url=settings.INFOCLINICA_BASE_URL,
         cookies=settings.INFOCLINICA_COOKIES,
         timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS
     ) as client:
-        # Формируем service объект с переданными параметрами
-        # Безопасное преобразование в int, если значение None - используем 0
-        def safe_int_or_zero(value):
-            if value is None:
-                return 0
-            try:
-                return int(value)
-            except (ValueError, TypeError):
-                return 0
+        # Формируем даты: сегодня и завтра в формате YYYYMMDD
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
         
-        service = ReservationScheduleService(
-            st=0,
-            en=0,
-            doctor=safe_int_or_zero(doctor_id),
-            cashList=0,
-            specList=safe_int_or_zero(department_id),
-            filialId=safe_int_or_zero(branch_id),
-            onlineMode=online_mode,
-            nsp=""
+        st = today.strftime("%Y%m%d")
+        en = tomorrow.strftime("%Y%m%d")
+        
+        # Формируем query параметры
+        params = {
+            "st": st,
+            "en": en,
+            "doctor": str(doctor_dcode) if doctor_dcode else "",
+        }
+        
+        # Добавляем filialId если передан
+        if filial_id:
+            params["filialId"] = str(filial_id)
+        
+        # Используем метод reservation_schedule с GET запросом
+        result = await client.reservation_schedule(
+            payload=None,
+            params=params,
+            use_get=True
         )
         
-        payload = InfoClinicaReservationSchedulePayload(services=[service])
-        result = await client.reservation_schedule(payload)
         return result.json or {}
 
 
@@ -688,60 +705,69 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
     builder = InlineKeyboardBuilder()
     available_times = []
     
-    # Пытаемся извлечь данные о расписании
-    # Структура ответа может варьироваться, поэтому обрабатываем разные варианты
-    schedule_info = schedule_data.get('data') or schedule_data
+    # Извлекаем данные из ответа API
+    data_list = schedule_data.get('data', [])
     
-    # Если есть информация о расписании на сегодня
-    if isinstance(schedule_info, dict):
-        # Ищем доступные временные слоты
-        today_slots = []
+    # Собираем все доступные интервалы на сегодня
+    today_intervals = []
+    
+    for item in data_list:
+        if not isinstance(item, dict):
+            continue
         
-        # Проверяем разные возможные структуры данных
-        if 'schedule' in schedule_info:
-            schedule_list = schedule_info.get('schedule', [])
-        elif isinstance(schedule_info, list):
-            schedule_list = schedule_info
-        else:
-            schedule_list = []
-        
-        # Ищем слоты на сегодня
-        for slot in schedule_list:
-            slot_date = slot.get('date') or slot.get('day') or ''
-            if str(slot_date) == today_str or (isinstance(slot_date, str) and today_str in slot_date):
-                time_slot = slot.get('time') or slot.get('st') or slot.get('start_time', '')
-                if time_slot:
-                    today_slots.append(time_slot)
-        
-        if today_slots:
-            # Сортируем времена
-            today_slots.sort()
-            available_times = today_slots[:5]  # Берем первые 5 времен
-        else:
-            # Тестовые данные времени, если API не вернул данные
-            available_times = ['09:00', '10:30', '12:00', '14:00', '15:30']
+        intervals = item.get('intervals', [])
+        for interval in intervals:
+            # Проверяем, что интервал свободен, доступен и на сегодня
+            work_date = str(interval.get('workDate', ''))
+            is_free = interval.get('isFree', False)
+            is_available = interval.get('isAvailable', False)
             
+            if work_date == today_str and is_free and is_available:
+                start_interval = interval.get('startInterval', '')
+                if start_interval:
+                    # Сохраняем дополнительную информацию для последующего использования
+                    interval_info = {
+                        'time': start_interval,
+                        'schedident': interval.get('schedident'),
+                        'filial': interval.get('filial'),
+                        'filialName': interval.get('filialName', ''),
+                        'workDate': work_date,
+                        'endInterval': interval.get('endInterval', '')
+                    }
+                    today_intervals.append(interval_info)
+    
+    # Сортируем интервалы по времени и убираем дубликаты
+    # Группируем по времени (может быть несколько интервалов с одинаковым временем начала)
+    time_map = {}
+    for interval in today_intervals:
+        time_key = interval['time']
+        if time_key not in time_map:
+            time_map[time_key] = interval
+    
+    # Формируем список уникальных времен и сортируем
+    available_times_data = sorted(time_map.values(), key=lambda x: x['time'])
+    available_times = [item['time'] for item in available_times_data[:10]]  # Берем первые 10 времен
+    
+    if available_times:
         text_parts.append(f'\n🕐 Выберите удобное время:')
-            
-        # Добавляем общую информацию о графике, если есть
-        if 'work_hours' in schedule_info:
-            work_hours = schedule_info.get('work_hours')
-            text_parts.append(f'\n⏱️ График работы: {work_hours}')
     else:
-        # Тестовые данные времени, если структура данных неожиданная
-        available_times = ['09:00', '10:30', '12:00', '14:00', '15:30']
-        text_parts.append(f'\n🕐 Выберите удобное время:')
+        text_parts.append(f'\n⏰ На сегодня свободное время отсутствует.')
+        text_parts.append(f'Попробуйте выбрать другой день.')
     
     # Создаем кнопки для каждого времени (по 2 кнопки в ряд)
     for i in range(0, len(available_times), 2):
         row_times = available_times[i:i+2]
-        buttons = [
-            CallbackButton(
-                text=time,
-                payload=f'time_{time.replace(":", "")}'
+        buttons = []
+        for time in row_times:
+            # Формируем payload с информацией об интервале
+            interval_data = time_map[time]
+            payload_data = f"{time.replace(':', '')}_{interval_data['schedident']}_{interval_data['workDate']}"
+            buttons.append(
+                CallbackButton(
+                    text=time,
+                    payload=f'time_{payload_data}'
+                )
             )
-            for time in row_times
-        ]
         builder.row(*buttons)
     
     # Кнопка "Назад" к врачам
@@ -758,21 +784,31 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
 
 @dp.message_callback(F.callback.payload.startswith('doctor_'))
 async def handle_doctor_selection(event: MessageCallback, context: MemoryContext):
-    # Извлекаем ID врача из payload
-    doctor_id = event.callback.payload.split('_')[-1]
+    # Извлекаем dcode врача из payload (так как используем dcode для идентификации)
+    doctor_dcode_from_payload = event.callback.payload.split('_')[-1]
     
     # Получаем информацию о враче
     data = await context.get_data()
     doctors = data.get('doctors_list', [])
     
     selected_doctor = None
+    # Ищем врача по dcode
     for doctor in doctors:
-        if str(doctor.get("id")) == doctor_id:
+        doctor_dcode = str(doctor.get("dcode", ""))
+        if doctor_dcode == doctor_dcode_from_payload:
             selected_doctor = doctor
             break
     
     if selected_doctor:
-        await context.update_data(selected_doctor_id=doctor_id)
+        # Сохраняем dcode врача (используем dcode как основной идентификатор)
+        doctor_dcode = selected_doctor.get("dcode")
+        doctor_id = selected_doctor.get("id") or doctor_dcode  # id может отсутствовать
+        
+        await context.update_data(
+            selected_doctor_id=doctor_id,
+            selected_doctor_dcode=doctor_dcode
+        )
+        
         doctor_name = selected_doctor.get("name", "Врач")
         
         # Получаем информацию о филиале и отделении
@@ -805,11 +841,21 @@ async def handle_doctor_selection(event: MessageCallback, context: MemoryContext
                 except (ValueError, TypeError):
                     return None
             
+            # Получаем dcode врача из контекста
+            doctor_dcode = data.get('selected_doctor_dcode')
+            if not doctor_dcode:
+                # Если dcode не найден, пытаемся использовать doctor_id
+                doctor_dcode = safe_int(doctor_id)
+            
+            logging.info(f"Запрос расписания: doctor_dcode={doctor_dcode}, filial_id={branch_id}, doctor_id={doctor_id}")
+            
+            # Получаем ID филиала
+            filial_id = safe_int(branch_id)
+            
             # Получаем график работы врача с переданными параметрами
             schedule_data = await get_doctor_schedule(
-                branch_id=safe_int(branch_id),
-                doctor_id=safe_int(doctor_id),
-                department_id=safe_int(department_id),
+                doctor_dcode=doctor_dcode,
+                filial_id=filial_id,
                 online_mode=1
             )
             
@@ -874,13 +920,35 @@ async def handle_back_to_branches(event: MessageCallback, context: MemoryContext
 
 @dp.message_callback(F.callback.payload.startswith('time_'))
 async def handle_time_selection(event: MessageCallback, context: MemoryContext):
-    # Извлекаем время из payload (формат: time_0900, time_1030 и т.д.)
-    time_str = event.callback.payload.replace('time_', '')
-    # Восстанавливаем формат времени (0900 -> 09:00)
-    if len(time_str) == 4:
-        selected_time = f"{time_str[:2]}:{time_str[2:]}"
+    # Извлекаем данные из payload (формат: time_1700_30017859_20260116)
+    # где 1700 - время, 30017859 - schedident, 20260116 - дата
+    payload_parts = event.callback.payload.replace('time_', '').split('_')
+    
+    if len(payload_parts) >= 3:
+        time_str = payload_parts[0]  # Время в формате HHMM
+        schedident = payload_parts[1]  # ID расписания
+        work_date = payload_parts[2]  # Дата в формате YYYYMMDD
+        
+        # Восстанавливаем формат времени (1700 -> 17:00)
+        if len(time_str) == 4:
+            selected_time = f"{time_str[:2]}:{time_str[2:]}"
+        else:
+            selected_time = time_str
+        
+        # Сохраняем информацию о выбранном времени
+        await context.update_data(
+            selected_time=selected_time,
+            selected_schedident=schedident,
+            selected_work_date=work_date
+        )
     else:
-        selected_time = time_str
+        # Fallback для старого формата
+        time_str = event.callback.payload.replace('time_', '')
+        if len(time_str) == 4:
+            selected_time = f"{time_str[:2]}:{time_str[2:]}"
+        else:
+            selected_time = time_str
+        await context.update_data(selected_time=selected_time)
     
     # Получаем информацию о выбранных данных
     data = await context.get_data()
@@ -1289,10 +1357,18 @@ async def handle_back_to_schedule(event: MessageCallback, context: MemoryContext
         except (ValueError, TypeError):
             return None
     
+    # Получаем dcode врача из контекста
+    doctor_dcode = data.get('selected_doctor_dcode')
+    if not doctor_dcode:
+        # Если dcode не найден, пытаемся использовать doctor_id
+        doctor_dcode = safe_int(doctor_id)
+    
+    # Получаем ID филиала
+    filial_id = safe_int(branch_id)
+    
     schedule_data = await get_doctor_schedule(
-        branch_id=safe_int(branch_id),
-        doctor_id=safe_int(doctor_id),
-        department_id=safe_int(department_id),
+        doctor_dcode=doctor_dcode,
+        filial_id=filial_id,
         online_mode=1
     )
     
