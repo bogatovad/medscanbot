@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from maxapi import F
 from maxapi.context import MemoryContext, State, StatesGroup
@@ -649,7 +649,9 @@ async def handle_doctors_pagination(event: MessageCallback, context: MemoryConte
 async def get_doctor_schedule(
     doctor_dcode: int | str | None = None,
     filial_id: int | str | None = None,
-    online_mode: int = 1
+    online_mode: int = 1,
+    start_date: date | None = None,
+    end_date: date | None = None
 ):
     """Получает график работы врача через API reservation/schedule с GET запросом"""
     async with InfoClinicaClient(
@@ -657,12 +659,14 @@ async def get_doctor_schedule(
         cookies=settings.INFOCLINICA_COOKIES,
         timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS
     ) as client:
-        # Формируем даты: сегодня и завтра в формате YYYYMMDD
-        today = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
+        # Если даты не указаны, используем сегодня и завтра
+        if not start_date:
+            start_date = datetime.now().date()
+        if not end_date:
+            end_date = start_date + timedelta(days=1)
         
-        st = today.strftime("%Y%m%d")
-        en = tomorrow.strftime("%Y%m%d")
+        st = start_date.strftime("%Y%m%d")
+        en = end_date.strftime("%Y%m%d")
         
         # Формируем query параметры
         params = {
@@ -685,20 +689,90 @@ async def get_doctor_schedule(
         return result.json or {}
 
 
-def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str, department_name: str):
+def create_calendar_keyboard(doctor_name: str, branch_name: str, department_name: str, days_ahead: int = 14):
+    """Создает календарь с кнопками для выбора даты"""
+    builder = InlineKeyboardBuilder()
+    
+    today = datetime.now().date()
+    
+    # Названия дней недели для русского языка
+    weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+
+    # Создаем кнопки для ближайших дней (по 3 кнопки в ряд)
+    buttons_row = []
+    for i in range(days_ahead):
+        date = today + timedelta(days=i)
+        date_str = date.strftime("%Y%m%d")
+        
+        # Форматируем дату для отображения: ДД.ММ (День недели)
+        weekday = weekdays[date.weekday()]
+        day_month = date.strftime("%d.%m")
+        button_text = f"{day_month} {weekday}"
+        
+        buttons_row.append(
+            CallbackButton(
+                text=button_text,
+                payload=f'date_{date_str}'
+            )
+        )
+        
+        # Добавляем ряд каждые 3 кнопки
+        if len(buttons_row) == 3:
+            builder.row(*buttons_row)
+            buttons_row = []
+    
+    # Добавляем оставшиеся кнопки
+    if buttons_row:
+        builder.row(*buttons_row)
+    
+    # Кнопка "Назад" к врачам
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад к врачам',
+            payload='back_to_doctors'
+        )
+    )
+    
+    text = (
+        f'✅ Вы выбрали:\n'
+        f'📍 Филиал: {branch_name}\n'
+        f'🏥 Отделение: {department_name}\n'
+        f'👨‍⚕️ Врач: {doctor_name}\n\n'
+        f'📅 Выберите дату:'
+    )
+    
+    return text, builder
+
+
+def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str, department_name: str, selected_date: date | str):
     """Форматирует информацию о графике работы врача и ближайших доступных временах с кнопками"""
     from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
     
-    today = datetime.now().date()
-    today_str = today.strftime("%Y%m%d")
+    # Преобразуем дату в строку формата YYYYMMDD
+    if isinstance(selected_date, date):
+        selected_date_str = selected_date.strftime("%Y%m%d")
+    else:
+        selected_date_str = selected_date
+    
+    # Форматируем дату для отображения
+    if isinstance(selected_date, date):
+        date_display = selected_date.strftime("%d.%m.%Y")
+    else:
+        # Парсим строку YYYYMMDD в дату
+        try:
+            date_obj = datetime.strptime(selected_date_str, "%Y%m%d").date()
+            date_display = date_obj.strftime("%d.%m.%Y")
+        except:
+            date_display = selected_date_str
     
     text_parts = [
-        f'✅ Вы выбрали:',
+        '✅ Вы выбрали:',
         f'📍 Филиал: {branch_name}',
         f'🏥 Отделение: {department_name}',
         f'👨‍⚕️ Врач: {doctor_name}',
+        f'📅 Дата: {date_display}',
         '',
-        '📅 График работы врача:'
+        '🕐 Доступное время:'
     ]
     
     # Создаем клавиатуру для выбора времени
@@ -708,8 +782,8 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
     # Извлекаем данные из ответа API
     data_list = schedule_data.get('data', [])
     
-    # Собираем все доступные интервалы на сегодня
-    today_intervals = []
+    # Собираем все доступные интервалы на выбранную дату
+    date_intervals = []
     
     for item in data_list:
         if not isinstance(item, dict):
@@ -717,12 +791,12 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
         
         intervals = item.get('intervals', [])
         for interval in intervals:
-            # Проверяем, что интервал свободен, доступен и на сегодня
+            # Проверяем, что интервал свободен, доступен и на выбранную дату
             work_date = str(interval.get('workDate', ''))
             is_free = interval.get('isFree', False)
             is_available = interval.get('isAvailable', False)
             
-            if work_date == today_str and is_free and is_available:
+            if work_date == selected_date_str and is_free and is_available:
                 start_interval = interval.get('startInterval', '')
                 if start_interval:
                     # Сохраняем дополнительную информацию для последующего использования
@@ -734,25 +808,25 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
                         'workDate': work_date,
                         'endInterval': interval.get('endInterval', '')
                     }
-                    today_intervals.append(interval_info)
+                    date_intervals.append(interval_info)
     
     # Сортируем интервалы по времени и убираем дубликаты
     # Группируем по времени (может быть несколько интервалов с одинаковым временем начала)
     time_map = {}
-    for interval in today_intervals:
+    for interval in date_intervals:
         time_key = interval['time']
         if time_key not in time_map:
             time_map[time_key] = interval
     
     # Формируем список уникальных времен и сортируем
     available_times_data = sorted(time_map.values(), key=lambda x: x['time'])
-    available_times = [item['time'] for item in available_times_data[:10]]  # Берем первые 10 времен
+    available_times = [item['time'] for item in available_times_data]  # Берем все доступные времена
     
     if available_times:
-        text_parts.append(f'\n🕐 Выберите удобное время:')
+        text_parts.append('')
     else:
-        text_parts.append(f'\n⏰ На сегодня свободное время отсутствует.')
-        text_parts.append(f'Попробуйте выбрать другой день.')
+        text_parts.append(f'\n⏰ На выбранную дату свободное время отсутствует.')
+        text_parts.append(f'Попробуйте выбрать другую дату.')
     
     # Создаем кнопки для каждого времени (по 2 кнопки в ряд)
     for i in range(0, len(available_times), 2):
@@ -770,16 +844,152 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
             )
         builder.row(*buttons)
     
-    # Кнопка "Назад" к врачам
+    # Кнопка "Назад" к выбору даты
     builder.row(
         CallbackButton(
-            text='🔙 Назад к врачам',
-            payload='back_to_doctors'
+            text='🔙 Назад к выбору даты',
+            payload='back_to_calendar'
         )
     )
     
     text = '\n'.join(text_parts)
     return text, builder
+
+
+@dp.message_callback(F.callback.payload.startswith('date_'))
+async def handle_date_selection(event: MessageCallback, context: MemoryContext):
+    """Обработчик выбора даты из календаря"""
+    # Извлекаем дату из payload (формат: date_20250116)
+    date_str = event.callback.payload.replace('date_', '')
+    
+    # Парсим дату из строки YYYYMMDD
+    try:
+        selected_date = datetime.strptime(date_str, "%Y%m%d").date()
+    except ValueError:
+        await event.message.answer('❌ Ошибка: неверный формат даты')
+        return
+    
+    # Сохраняем выбранную дату в контексте
+    await context.update_data(selected_date=date_str)
+    
+    # Получаем информацию о выбранных данных
+    data = await context.get_data()
+    branch_id = data.get('selected_branch_id')
+    department_id = data.get('selected_department_id')
+    doctor_id = data.get('selected_doctor_id')
+    doctor_dcode = data.get('selected_doctor_dcode')
+    branches = data.get('branches_list', [])
+    departments = data.get('departments_list', [])
+    doctors = data.get('doctors_list', [])
+    
+    branch_name = "Филиал"
+    for branch in branches:
+        if str(branch.get("id")) == branch_id:
+            branch_name = branch.get("name", "Филиал")
+            break
+    
+    department_name = "Отделение"
+    for department in departments:
+        if str(department.get("id")) == department_id:
+            department_name = department.get("name", "Отделение")
+            break
+    
+    doctor_name = "Врач"
+    for doctor in doctors:
+        if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
+            doctor_name = doctor.get("name", "Врач")
+            break
+    
+    await event.message.delete()
+    
+    try:
+        # Преобразуем ID в int, проверяя на None и строку 'None'
+        def safe_int(value):
+            if not value or value == 'None' or value == 'null':
+                return None
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return None
+        
+        # Получаем dcode врача из контекста
+        if not doctor_dcode:
+            # Если dcode не найден, пытаемся использовать doctor_id
+            doctor_dcode = safe_int(doctor_id)
+        
+        # Получаем ID филиала
+        filial_id = safe_int(branch_id)
+        
+        # Получаем график работы врача на выбранную дату
+        schedule_data = await get_doctor_schedule(
+            doctor_dcode=doctor_dcode,
+            filial_id=filial_id,
+            online_mode=1,
+            start_date=selected_date,
+            end_date=selected_date + timedelta(days=1)
+        )
+        
+        # Форматируем информацию о графике (возвращает текст и клавиатуру)
+        schedule_text, time_keyboard = format_schedule_info(
+            schedule_data, 
+            doctor_name, 
+            branch_name, 
+            department_name, 
+            selected_date
+        )
+        
+        # Отправляем информацию о графике с кнопками времени
+        await event.message.answer(
+            text=schedule_text,
+            attachments=[time_keyboard.as_markup()]
+        )
+        
+    except Exception as e:
+        logging.error(f"Ошибка при получении расписания на дату: {e}")
+        await event.message.answer(
+            f'❌ Ошибка при загрузке расписания на выбранную дату.\n\n'
+            f'Попробуйте выбрать другую дату или обратитесь в поддержку.'
+        )
+
+
+@dp.message_callback(F.callback.payload == 'back_to_calendar')
+async def handle_back_to_calendar(event: MessageCallback, context: MemoryContext):
+    """Возврат к выбору даты из календаря"""
+    data = await context.get_data()
+    branch_id = data.get('selected_branch_id')
+    department_id = data.get('selected_department_id')
+    doctor_id = data.get('selected_doctor_id')
+    branches = data.get('branches_list', [])
+    departments = data.get('departments_list', [])
+    doctors = data.get('doctors_list', [])
+    
+    branch_name = "Филиал"
+    for branch in branches:
+        if str(branch.get("id")) == branch_id:
+            branch_name = branch.get("name", "Филиал")
+            break
+    
+    department_name = "Отделение"
+    for department in departments:
+        if str(department.get("id")) == department_id:
+            department_name = department.get("name", "Отделение")
+            break
+    
+    doctor_name = "Врач"
+    doctor_dcode = data.get('selected_doctor_dcode')
+    for doctor in doctors:
+        if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
+            doctor_name = doctor.get("name", "Врач")
+            break
+    
+    # Показываем календарь
+    calendar_text, calendar_keyboard = create_calendar_keyboard(doctor_name, branch_name, department_name)
+    
+    await event.message.delete()
+    await event.message.answer(
+        text=calendar_text,
+        attachments=[calendar_keyboard.as_markup()]
+    )
 
 
 @dp.message_callback(F.callback.payload.startswith('doctor_'))
@@ -831,50 +1041,14 @@ async def handle_doctor_selection(event: MessageCallback, context: MemoryContext
         
         await event.message.delete()
         
-        try:
-            # Преобразуем ID в int, проверяя на None и строку 'None'
-            def safe_int(value):
-                if not value or value == 'None' or value == 'null':
-                    return None
-                try:
-                    return int(value)
-                except (ValueError, TypeError):
-                    return None
-            
-            # Получаем dcode врача из контекста
-            doctor_dcode = data.get('selected_doctor_dcode')
-            if not doctor_dcode:
-                # Если dcode не найден, пытаемся использовать doctor_id
-                doctor_dcode = safe_int(doctor_id)
-            
-            logging.info(f"Запрос расписания: doctor_dcode={doctor_dcode}, filial_id={branch_id}, doctor_id={doctor_id}")
-            
-            # Получаем ID филиала
-            filial_id = safe_int(branch_id)
-            
-            # Получаем график работы врача с переданными параметрами
-            schedule_data = await get_doctor_schedule(
-                doctor_dcode=doctor_dcode,
-                filial_id=filial_id,
-                online_mode=1
-            )
-            
-            # Форматируем информацию о графике (возвращает текст и клавиатуру)
-            schedule_text, time_keyboard = format_schedule_info(schedule_data, doctor_name, branch_name, department_name)
-            
-            # Отправляем информацию о графике с кнопками времени
-            await event.message.answer(
-                text=schedule_text,
-                attachments=[time_keyboard.as_markup()]
-            )
-            
-        except Exception as e:
-            logging.error(f"Ошибка при получении графика врача: {e}")
-            await event.message.answer(
-                f'Вы выбрали:\n📍 Филиал: {branch_name}\n🏥 Отделение: {department_name}\n👨‍⚕️ Врач: {doctor_name}\n\n'
-                f'⚠️ Не удалось загрузить график работы врача. Попробуйте позже.'
-            )
-            await create_keyboard(event)
+        # Показываем календарь для выбора даты
+        calendar_text, calendar_keyboard = create_calendar_keyboard(doctor_name, branch_name, department_name)
+        
+        await event.message.answer(
+            text=calendar_text,
+            attachments=[calendar_keyboard.as_markup()]
+        )
+
     else:
         await event.message.delete()
         await event.message.answer('Врач не найден')
@@ -998,7 +1172,7 @@ async def handle_time_selection(event: MessageCallback, context: MemoryContext):
     )
     builder.row(
         CallbackButton(
-            text='🔙 Назад к выбору времени',
+            text='🔙 Назад к выбору даты',
             payload='back_to_schedule'
         )
     )
@@ -1319,13 +1493,11 @@ async def handle_reject_personal_data(event: MessageCallback, context: MemoryCon
 
 @dp.message_callback(F.callback.payload == 'back_to_schedule')
 async def handle_back_to_schedule(event: MessageCallback, context: MemoryContext):
-    """Возврат к выбору времени"""
+    """Возврат к выбору даты (календарю)"""
     data = await context.get_data()
     branch_id = data.get('selected_branch_id')
     department_id = data.get('selected_department_id')
     doctor_id = data.get('selected_doctor_id')
-    
-    # Получаем информацию о враче и формируем расписание
     branches = data.get('branches_list', [])
     departments = data.get('departments_list', [])
     doctors = data.get('doctors_list', [])
@@ -1343,41 +1515,19 @@ async def handle_back_to_schedule(event: MessageCallback, context: MemoryContext
             break
     
     doctor_name = "Врач"
+    doctor_dcode = data.get('selected_doctor_dcode')
     for doctor in doctors:
-        if str(doctor.get("id")) == doctor_id:
+        if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
             doctor_name = doctor.get("name", "Врач")
             break
     
-    # Получаем расписание
-    def safe_int(value):
-        if not value or value == 'None' or value == 'null':
-            return None
-        try:
-            return int(value)
-        except (ValueError, TypeError):
-            return None
-    
-    # Получаем dcode врача из контекста
-    doctor_dcode = data.get('selected_doctor_dcode')
-    if not doctor_dcode:
-        # Если dcode не найден, пытаемся использовать doctor_id
-        doctor_dcode = safe_int(doctor_id)
-    
-    # Получаем ID филиала
-    filial_id = safe_int(branch_id)
-    
-    schedule_data = await get_doctor_schedule(
-        doctor_dcode=doctor_dcode,
-        filial_id=filial_id,
-        online_mode=1
-    )
-    
-    schedule_text, time_keyboard = format_schedule_info(schedule_data, doctor_name, branch_name, department_name)
+    # Показываем календарь
+    calendar_text, calendar_keyboard = create_calendar_keyboard(doctor_name, branch_name, department_name)
     
     await event.message.delete()
     await event.message.answer(
-        text=schedule_text,
-        attachments=[time_keyboard.as_markup()]
+        text=calendar_text,
+        attachments=[calendar_keyboard.as_markup()]
     )
 
 
