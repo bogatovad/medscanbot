@@ -307,71 +307,71 @@ def authorize_user(username: str, password: str) -> Dict[str, Any]:
     return response_data
 
 
-def main():
-    """Пример использования модуля авторизации"""
-    user = {"username": "atwhatilold@gmail.com", "password": "ilikewow"}
-
-    result = authorize_user(
-        username=user['username'],
-        password=user['password'],
-    )
-
-    print(result)
-
-    # Данные для записи
-    reserve_data = {
-        # todo: все эти данные берем из ответа на https://medscan-t.infoclinica.ru/api/reservation/schedule
-        "date": "20260124",
-        "dcode": 990102079,
-
-        # todo: тут ставим st + 30 минут (то есть запись длится 30 минут)
-        "en": "21:00",
-        "filial": 4,
-        "onlineType": 0,
-        "schedident": 40075624,
-
-        # todo: сюда ставим время.Нужно проверить что запись на этот день свободна.
-        #  если "isFree": false, то запись невозможна в этот день и надо искать другую.
-        "st": "11:00",
-        "depnum": 990034235
-    }
-
-    # Заголовки для запроса записи
-    headers = {
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'en-US,en;q=0.9',
-        'priority': 'u=1, i',
-        'referer': 'https://medscan-t.infoclinica.ru/reservation',
-        'sec-ch-ua': '"Chromium";v="143", "Not A(Brand";v="24"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Linux"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-        'wr2-apirequest': '_',
-        'x-integration-type': 'PORTAL-WR2',
-        'content-type': 'application/json',
-    }
-
-    session = result['session']
-
-    # Устанавливаем заголовки в сессию
-    session.headers.update(headers)
-
-    # Отправляем запрос на запись
-    response = session.post(
-        'https://medscan-t.infoclinica.ru/api/reservation/reserve',
-        json=reserve_data
-    )
-
-    # response = session.delete(
-    #     'https://medscan-t.infoclinica.ru/record/delete/40465891/4',
-    #     json=reserve_data
-    # )
-    print(f"Статус записи: {response.status_code}")
-    print(f"Ответ: {response.text}")
-
-if __name__ == "__main__":
-    main()
+# def main():
+#     """Пример использования модуля авторизации"""
+#     user = {"username": "atwhatilold@gmail.com", "password": "ilikewow"}
+#
+#     result = authorize_user(
+#         username=user['username'],
+#         password=user['password'],
+#     )
+#
+#     print(result)
+#
+#     # Данные для записи
+#     reserve_data = {
+#         # todo: все эти данные берем из ответа на https://medscan-t.infoclinica.ru/api/reservation/schedule
+#         "date": "20260124",
+#         "dcode": 990102079,
+#
+#         # todo: тут ставим st + 30 минут (то есть запись длится 30 минут)
+#         "en": "21:00",
+#         "filial": 4,
+#         "onlineType": 0,
+#         "schedident": 40075624,
+#
+#         # todo: сюда ставим время.Нужно проверить что запись на этот день свободна.
+#         #  если "isFree": false, то запись невозможна в этот день и надо искать другую.
+#         "st": "11:00",
+#         "depnum": 990034235
+#     }
+#
+#     # Заголовки для запроса записи
+#     headers = {
+#         'accept': 'application/json, text/plain, */*',
+#         'accept-language': 'en-US,en;q=0.9',
+#         'priority': 'u=1, i',
+#         'referer': 'https://medscan-t.infoclinica.ru/reservation',
+#         'sec-ch-ua': '"Chromium";v="143", "Not A(Brand";v="24"',
+#         'sec-ch-ua-mobile': '?0',
+#         'sec-ch-ua-platform': '"Linux"',
+#         'sec-fetch-dest': 'empty',
+#         'sec-fetch-mode': 'cors',
+#         'sec-fetch-site': 'same-origin',
+#         'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+#         'wr2-apirequest': '_',
+#         'x-integration-type': 'PORTAL-WR2',
+#         'content-type': 'application/json',
+#     }
+#
+#     session = result['session']
+#
+#     # Устанавливаем заголовки в сессию
+#     session.headers.update(headers)
+#
+#     # Отправляем запрос на запись
+#     response = session.post(
+#         'https://medscan-t.infoclinica.ru/api/reservation/reserve',
+#         json=reserve_data
+#     )
+#
+#     # response = session.delete(
+#     #     'https://medscan-t.infoclinica.ru/record/delete/40465891/4',
+#     #     json=reserve_data
+#     # )
+#     print(f"Статус записи: {response.status_code}")
+#     print(f"Ответ: {response.text}")
+#
+# if __name__ == "__main__":
+#     main()
 
