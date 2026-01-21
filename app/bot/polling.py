@@ -1,11 +1,15 @@
 import asyncio
 import logging
+import tempfile
+import os
 
 from datetime import datetime, timedelta, date
 
+import httpx
+
 from maxapi import F
 from maxapi.context import MemoryContext, State, StatesGroup
-from maxapi.types import BotStarted, Command, MessageCreated, CallbackButton, MessageCallback, BotCommand
+from maxapi.types import BotStarted, Command, MessageCreated, CallbackButton, MessageCallback, BotCommand, InputMedia
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from app.providers.infoclinica_client import InfoClinicaClient
@@ -25,6 +29,37 @@ start_text = '''Чат-бота Medscan 💙'''
 BRANCHES_PER_PAGE = 5
 DEPARTMENTS_PER_PAGE = 5
 DOCTORS_PER_PAGE = 5
+
+
+async def download_image_to_temp(url: str) -> str | None:
+    """
+    Скачивает изображение по URL во временный файл и возвращает путь к нему.
+    
+    Args:
+        url: URL изображения
+        
+    Returns:
+        str: Путь к временному файлу или None в случае ошибки
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            
+            # Определяем расширение файла из URL или Content-Type
+            ext = ".jpg"
+            if "png" in url.lower() or response.headers.get("content-type", "").startswith("image/png"):
+                ext = ".png"
+            elif "gif" in url.lower() or response.headers.get("content-type", "").startswith("image/gif"):
+                ext = ".gif"
+            
+            # Создаем временный файл
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+                tmp_file.write(response.content)
+                return tmp_file.name
+    except Exception as e:
+        logging.error(f"Ошибка при скачивании изображения {url}: {e}")
+        return None
 
 
 class Form(StatesGroup):
@@ -193,17 +228,34 @@ async def handle_info_mission(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     
     mission_text = (
-        '🎯 Миссия АО «Медскан»:\n\n'
-        'Предоставление высококачественной медицинской помощи, основанной на '
-        'передовых технологиях и индивидуальном подходе к каждому пациенту.\n\n'
-        '💎 Ценности:\n'
-        '• Профессионализм и экспертиза\n'
-        '• Забота о здоровье пациентов\n'
-        '• Инновации в медицине\n'
-        '• Ответственность и надежность'
+        'Согласно статье 7 Конституции, «Российская Федерация - социальное государство, '
+        'политика которого направлена на создание условий, обеспечивающих достойную жизнь '
+        'и свободное развитие человека». Федеральный закон «Об основах охраны здоровья граждан» определяет '
+        'здоровье как «состояние физического, психического и социального благополучия человека». \n\n'
+        ' Мы понимаем социальную ответственность бизнеса как отказ от эксплуатации человеческого '
+        'капитала в пользу инвестиций в раскрытие его потенциала. Высшая ценность для нас - '
+        'человек и качество его жизни, важнейшей составляющей которого является здоровье. '
+        'Здравоохранение – не просто отрасль из сферы услуг, оказывающая помощь людям, '
+        'испытывающим проблемы со своим здоровьем и занимающаяся их реабилитацией после '
+        'выздоровления. Это система, выступающая гарантом социального благополучия. '
+        'Медицина должна не только лечить болезнь, но и работать на опережение,'
+        ' предотвращая угрозы здоровью, сберегая ресурсы общества \n\n'
+        'Поэтому мы рассматриваем свою деятельность как социальный проект и гуманитарную миссию, '
+        'осуществляемую в соответствии с законами Российской Федерации и в парадигме '
+        'глобальных целей устойчивого развития. Для решения этих задач мы реализуем '
+        'стратегию по созданию действительно народной медицинской компании,'
+        ' оказывающей высококвалифицированную помощь миллионам пациентов во всех '
+        'регионах нашей огромной страны, в государствах Евразийского Экономического '
+        'Союза и Содружества Независимых Государств. Формирование широкой сети учреждений '
+        'здравоохранения позволит внедрить единые стандарты, обеспечить обмен знаниями и опытом. Мы руководствуемся '
+        'принципами корпоративного управления, ориентирующими бизнес на решение социальных и '
+        'экологических проблем. Медицина - это высокотехнологичная сфера, которая обеспечивает '
+        'рабочие места не только в лечебных учреждениях, но и смежных отраслях. Медицинское '
+        'учреждение – это, прежде всего, люди, которые в нем работают'
     )
     
     builder = InlineKeyboardBuilder()
+
     builder.row(
         CallbackButton(
             text='🔙 Назад',
@@ -300,10 +352,26 @@ async def handle_info_hadassah(event: MessageCallback, context: MemoryContext):
         )
     )
     
+    attachments = [builder.as_markup()]
+
+    # Скачиваем изображение по URL во временный файл
+    image_url = "https://habrastorage.org/webt/py/-p/-x/py-p-x30iedbbmaxylu84k51oyg.jpeg"
+    temp_image_path = await download_image_to_temp(image_url)
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+    
     await event.message.answer(
         text=hadassah_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_yauza')
@@ -332,9 +400,18 @@ async def handle_info_yauza(event: MessageCallback, context: MemoryContext):
         )
     )
     
+    # Добавление изображения
+    attachments = [builder.as_markup()]
+
+    image_url = "https://habrastorage.org/webt/zk/mr/h5/zkmrh5yavsdjs0qeed5efgr-qys.jpeg"
+    temp_image_path = await download_image_to_temp(image_url)
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+
     await event.message.answer(
         text=yauza_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
 
 
@@ -358,9 +435,19 @@ async def handle_info_medscan_llc(event: MessageCallback, context: MemoryContext
         )
     )
     
+    # Добавление изображения
+    attachments = [builder.as_markup()]
+
+    image_url = "https://habrastorage.org/webt/3w/l0/kx/3wl0kxuhplibz2gr8nroczfudc4.jpeg"
+    temp_image_path = await download_image_to_temp(image_url)
+
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+
     await event.message.answer(
         text=medscan_llc_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
 
 
@@ -394,9 +481,19 @@ async def handle_info_medassist_kursk(event: MessageCallback, context: MemoryCon
         )
     )
     
+    # Добавление изображения
+    attachments = [builder.as_markup()]
+
+    image_url = "https://habrastorage.org/webt/jk/dy/y9/jkdyy9rxrmkxrs9w60f7gls7npi.jpeg"
+    temp_image_path = await download_image_to_temp(image_url)
+
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+    
     await event.message.answer(
         text=medassist_kursk_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
 
 
@@ -426,9 +523,19 @@ async def handle_info_medical_on_group(event: MessageCallback, context: MemoryCo
         )
     )
     
+    # Добавление изображения
+    attachments = [builder.as_markup()]
+
+    image_url = "https://habrastorage.org/webt/t7/h0/kv/t7h0kvo2qiyrq5qzmlkwqhhp86c.png"
+    temp_image_path = await download_image_to_temp(image_url)
+
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+
     await event.message.answer(
         text=medical_on_group_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
 
 
@@ -456,9 +563,19 @@ async def handle_info_kdl(event: MessageCallback, context: MemoryContext):
         )
     )
     
+    # Добавление изображения
+    attachments = [builder.as_markup()]
+
+    image_url = "https://habrastorage.org/webt/ej/qy/4m/ejqy4mjuqembfed-p5fnrjeqiou.jpeg"
+    temp_image_path = await download_image_to_temp(image_url)
+
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+
     await event.message.answer(
         text=kdl_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
 
 
