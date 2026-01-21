@@ -61,8 +61,10 @@ class InfoClinicaClient:
 
         self._headers_json = {
             **base_headers,
-            "accept": "application/json, text/javascript, */*; q=0.01",
-            "content-type": "application/json; charset=UTF-8",
+            "accept": "application/json, text/plain, */*",
+            "content-type": "application/json",
+            "wr2-apirequest": "_",
+            "x-integration-type": "PORTAL-WR2",
         }
 
         client_kwargs: dict[str, Any] = {
@@ -87,6 +89,65 @@ class InfoClinicaClient:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.aclose()
+
+    async def get_initial_session(self) -> bool:
+        """
+        Получает начальную сессию (PLAY_SESSION cookie).
+
+        Returns:
+            bool: Успешно ли получена сессия
+        """
+        try:
+            resp = await self._client_json.get("/")
+            resp.raise_for_status()
+            # Проверяем наличие PLAY_SESSION cookie
+            cookies = dict(resp.cookies)
+            return "PLAY_SESSION" in cookies
+        except Exception as e:
+            logger.debug(f"Ошибка получения начальной сессии: {e}")
+            return False
+
+    async def check_auth_status(
+        self,
+        *,
+        raise_for_status: bool = False,
+    ) -> InfoClinicaHttpResult:
+        """
+        Проверяет статус авторизации через GET /logged-in.
+
+        Args:
+            raise_for_status: Вызывать raise_for_status() при ошибке
+
+        Returns:
+            InfoClinicaHttpResult: Результат запроса с данными пользователя
+        """
+        headers = {"referer": f"{self.base_url}/"}
+        resp = await self._client_json.get("/logged-in", headers=headers)
+        if raise_for_status:
+            resp.raise_for_status()
+
+        parsed_json: Any | None = None
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+
+        logger.debug(
+            "InfoClinica /logged-in status=%s body=%s",
+            resp.status_code,
+            (resp.text[:2000] + "…") if len(resp.text) > 2000 else resp.text,
+        )
+        if parsed_json is not None:
+            logger.debug(
+                "InfoClinica /logged-in json=%s",
+                jsonlib.dumps(parsed_json, ensure_ascii=False)[:2000],
+            )
+
+        return InfoClinicaHttpResult(
+            status_code=resp.status_code,
+            text=resp.text,
+            json=parsed_json,
+        )
 
     async def registration(
         self,
@@ -184,6 +245,12 @@ class InfoClinicaClient:
         raise_for_status: bool = False,
     ) -> InfoClinicaHttpResult:
         """
+        Полный цикл авторизации:
+        1. Получает начальную сессию (PLAY_SESSION)
+        2. Проверяет текущий статус авторизации
+        3. Выполняет авторизацию через POST /login
+        4. Проверяет результат авторизации через GET /logged-in
+
         POST /login with JSON body.
 
         Mirrors curl:
@@ -191,35 +258,201 @@ class InfoClinicaClient:
         - content-type: application/json; charset=UTF-8
         - body: {"accept":false,"code":"","formKey":"pcode","g-recaptcha-response":"",...}
         """
+        start_time = time.time()
+        username = payload.username
 
-        body = payload.to_json()
-
-        resp = await self._client_json.post("/login", json=body)
-        if raise_for_status:
-            resp.raise_for_status()
-
-        parsed_json: Any | None = None
         try:
-            parsed_json = resp.json()
-        except Exception:
-            parsed_json = None
+            # 1. Получаем начальную сессию
+            logger.debug(f"[{username}] Получаем начальную сессию...")
+            if not await self.get_initial_session():
+                logger.warning(f"[{username}] Не удалось получить начальную сессию")
+                return InfoClinicaHttpResult(
+                    status_code=500,
+                    text="Не удалось получить начальную сессию",
+                    json={"success": False, "error": "Не удалось получить начальную сессию"},
+                )
 
-        logger.debug(
-            "InfoClinica /login status=%s body=%s",
-            resp.status_code,
-            (resp.text[:2000] + "…") if len(resp.text) > 2000 else resp.text,
-        )
-        if parsed_json is not None:
+            # 2. Проверяем, что не авторизованы
+            logger.debug(f"[{username}] Проверяем текущий статус...")
+            auth_status_result = await self.check_auth_status()
+            if auth_status_result.json and auth_status_result.json.get("authenticated"):
+                logger.info(f"[{username}] Уже авторизован")
+                return InfoClinicaHttpResult(
+                    status_code=auth_status_result.status_code,
+                    text=auth_status_result.text,
+                    json=auth_status_result.json,
+                )
+
+            # 3. Авторизуемся
+            logger.debug(f"[{username}] Выполняем авторизацию...")
+            body = payload.to_json()
+
+            resp = await self._client_json.post("/login", json=body, follow_redirects=True)
+            if raise_for_status:
+                resp.raise_for_status()
+
+            parsed_json: Any | None = None
+            try:
+                parsed_json = resp.json()
+            except Exception:
+                parsed_json = None
+
             logger.debug(
-                "InfoClinica /login json=%s",
-                jsonlib.dumps(parsed_json, ensure_ascii=False)[:2000],
+                "InfoClinica /login status=%s body=%s",
+                resp.status_code,
+                (resp.text[:2000] + "…") if len(resp.text) > 2000 else resp.text,
+            )
+            if parsed_json is not None:
+                logger.debug(
+                    "InfoClinica /login json=%s",
+                    jsonlib.dumps(parsed_json, ensure_ascii=False)[:2000],
+                )
+
+            # 4. Проверяем успешность авторизации по ответу
+            # 303 See Other - это нормальный редирект при успешном логине
+            # 200 - также может быть успешным ответом
+            if resp.status_code not in (200, 303):
+                return InfoClinicaHttpResult(
+                    status_code=resp.status_code,
+                    text=resp.text,
+                    json=parsed_json or {"success": False, "error": f"HTTP {resp.status_code}"},
+                )
+
+            # Если есть JSON ответ и он указывает на ошибку
+            if parsed_json and isinstance(parsed_json, dict) and not parsed_json.get("success", True):
+                # Проверяем наличие явного указания на ошибку
+                if parsed_json.get("error") or parsed_json.get("message"):
+                    return InfoClinicaHttpResult(
+                        status_code=resp.status_code,
+                        text=resp.text,
+                        json=parsed_json,
+                    )
+
+            # 5. Проверяем авторизацию через logged-in endpoint
+            logger.debug(f"[{username}] Проверяем результат авторизации...")
+            auth_status_result = await self.check_auth_status()
+
+            if auth_status_result.status_code == 200:
+                user_data = auth_status_result.json
+                if user_data and user_data.get("authenticated"):
+                    elapsed = time.time() - start_time
+                    logger.info(f"[{username}] ✓ Авторизация успешна за {elapsed:.2f} сек")
+                    return InfoClinicaHttpResult(
+                        status_code=auth_status_result.status_code,
+                        text=auth_status_result.text,
+                        json=user_data,
+                    )
+                else:
+                    return InfoClinicaHttpResult(
+                        status_code=auth_status_result.status_code,
+                        text=auth_status_result.text,
+                        json=user_data or {"success": False, "error": "Пользователь не авторизован после логина"},
+                    )
+            else:
+                return InfoClinicaHttpResult(
+                    status_code=auth_status_result.status_code,
+                    text=auth_status_result.text,
+                    json=auth_status_result.json or {"success": False, "error": f"Ошибка проверки авторизации: HTTP {auth_status_result.status_code}"},
+                )
+
+        except httpx.TimeoutException:
+            logger.error(f"[{username}] Таймаут при выполнении запроса")
+            return InfoClinicaHttpResult(
+                status_code=408,
+                text="Таймаут при выполнении запроса",
+                json={"success": False, "error": "Таймаут при выполнении запроса"},
+            )
+        except httpx.ConnectError:
+            logger.error(f"[{username}] Ошибка соединения")
+            return InfoClinicaHttpResult(
+                status_code=503,
+                text="Ошибка соединения",
+                json={"success": False, "error": "Ошибка соединения"},
+            )
+        except Exception as e:
+            logger.error(f"[{username}] Неизвестная ошибка: {e}", exc_info=True)
+            return InfoClinicaHttpResult(
+                status_code=500,
+                text=f"Неизвестная ошибка: {str(e)}",
+                json={"success": False, "error": f"Неизвестная ошибка: {str(e)}"},
             )
 
-        return InfoClinicaHttpResult(
-            status_code=resp.status_code,
-            text=resp.text,
-            json=parsed_json,
+    async def authorize_user(
+        self,
+        username: str,
+        password: str,
+    ) -> dict[str, Any]:
+        """
+        Основная функция авторизации пользователя.
+        Удобный метод для использования в боте, который возвращает структурированный результат.
+
+        Args:
+            username: Логин пользователя
+            password: Пароль пользователя
+
+        Returns:
+            dict: Результат авторизации с полями:
+                - success: bool - успешность авторизации
+                - username: str - логин пользователя
+                - error: str | None - сообщение об ошибке
+                - timestamp: float - время выполнения
+                - user_id: int | None - ID пользователя (если успешно)
+                - full_name: str | None - полное имя (если успешно)
+                - email: str | None - email (если успешно)
+                - phone: str | None - телефон (если успешно)
+                - authenticated: bool | None - статус авторизации (если успешно)
+                - check_token: str | None - токен проверки (если успешно)
+                - cookies_obtained: list[str] - список полученных cookies (если успешно)
+                - client: InfoClinicaClient - клиент с авторизованной сессией (если успешно)
+        """
+        logger.info(f"Начинаем авторизацию пользователя: {username}")
+
+        # Создаем payload для авторизации
+        payload = InfoClinicaLoginPayload(
+            username=username,
+            password=password,
         )
+
+        # Выполняем авторизацию
+        result = await self.login(payload)
+
+        # Формируем ответ в том же формате, что и старая функция authorize_user
+        response_data: dict[str, Any] = {
+            "success": False,
+            "username": username,
+            "error": None,
+            "timestamp": time.time(),
+        }
+
+        # Проверяем успешность авторизации
+        if result.status_code == 200 and result.json:
+            user_data = result.json
+            if user_data.get("authenticated"):
+                response_data.update({
+                    "success": True,
+                    "user_id": user_data.get("id"),
+                    "full_name": user_data.get("fullName"),
+                    "email": user_data.get("email"),
+                    "phone": user_data.get("phone"),
+                    "authenticated": user_data.get("authenticated"),
+                    "check_token": user_data.get("checkToken"),
+                    "cookies_obtained": list(self._client_json.cookies.keys()) if self._client_json.cookies else [],
+                    "client": self,  # Возвращаем сам клиент для дальнейшего использования
+                })
+            else:
+                # Авторизация не удалась
+                error_msg = user_data.get("error") or "Пользователь не авторизован после логина"
+                response_data["error"] = error_msg
+        else:
+            # Ошибка авторизации
+            error_msg = "Неизвестная ошибка авторизации"
+            if result.json and isinstance(result.json, dict):
+                error_msg = result.json.get("error") or error_msg
+            elif result.text:
+                error_msg = result.text[:200]  # Берем первые 200 символов текста ошибки
+            response_data["error"] = error_msg
+
+        return response_data
 
     async def change_temp_password(
         self,
@@ -860,3 +1093,4 @@ class InfoClinicaClient:
         )
 
 
+    

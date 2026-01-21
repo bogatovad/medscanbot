@@ -146,22 +146,27 @@ class InfoClinicaReservationReservePayload(BaseModel):
     """
     Payload for POST /api/reservation/reserve (application/json).
     Example:
-    {"date":"20251228","dcode":21,"en":"12:00","filial":12,"onlineType":1,
-     "schedident":12,"st":"12:00","depnum":12,"refid":"12"}
+    {"date":"20260127","dcode":20000046,"depnum":990034235,"en":"09:00","filial":2,
+     "st":"08:30","timezone":3,"schedident":20037165,"services":[],
+     "onlineType":0,"refid":null,"schedid":null,"deviceDetect":2}
     """
 
     date: str
     dcode: int
+    depnum: int
     en: str
     filial: int
-    onlineType: int
-    schedident: int
     st: str
-    depnum: int
-    refid: str
+    timezone: int = 3  # Часовой пояс (по умолчанию 3 для Москвы)
+    schedident: int
+    services: list[Any] = []  # Список услуг (обычно пустой)
+    onlineType: int
+    refid: str | None = None  # ID реферала (может быть null)
+    schedid: int | None = None  # ID расписания (может быть null)
+    deviceDetect: int = 2  # Тип устройства (2 = desktop/web)
 
     def to_json(self) -> dict[str, Any]:
-        return self.model_dump(by_alias=True, exclude_none=False)
+        return self.model_dump(by_alias=True, exclude_none=True)
 
 
 class ReservationScheduleService(BaseModel):

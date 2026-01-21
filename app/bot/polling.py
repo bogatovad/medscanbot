@@ -12,13 +12,10 @@ from app.providers.infoclinica_client import InfoClinicaClient
 from app.config import settings
 from app.bot import bot, dp
 from app.schemas.infoclinica import (
-    InfoClinicaLoginPayload,
-    InfoClinicaRegistrationPayload
+    InfoClinicaRegistrationPayload,
+    InfoClinicaReservationReservePayload,
 )
 from app.bot.router import router
-from app.bot.auth import authorize_user, MedscanAuthClient
-import requests
-import requests
 
 logging.basicConfig(level=logging.INFO)
 dp.include_routers(router)
@@ -678,125 +675,6 @@ def add_30_minutes(time_str: str) -> str:
         return time_str
 
 
-def make_reservation(
-    session: requests.Session,
-    reserve_data: dict,
-    selected_date_str: str = None,
-    selected_time_str: str = None
-) -> tuple[bool, str]:
-    """
-    Выполняет запись на прием через авторизованную сессию
-    
-    Args:
-        session: Авторизованная сессия requests.Session
-        reserve_data: Данные для записи
-    
-    Returns:
-        tuple: (success: bool, message: str)
-    """
-    try:
-        # Логируем данные для отладки
-        logging.info(f"Данные для записи: {reserve_data}")
-        # Собираем куки так же, как в auth.py
-        cookies_dict = {}
-        for cookie in session.cookies:
-            cookies_dict[cookie.name] = cookie.value
-        logging.info(f"Куки в сессии: {cookies_dict}")
-        
-        # Заголовки для запроса записи
-        headers = {
-            'accept': 'application/json, text/plain, */*',
-            'accept-language': 'en-US,en;q=0.9',
-            'priority': 'u=1, i',
-            'referer': 'https://medscan-t.infoclinica.ru/reservation',
-            'sec-ch-ua': '"Chromium";v="143", "Not A(Brand";v="24"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Linux"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-            'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-            'wr2-apirequest': '_',
-            'x-integration-type': 'PORTAL-WR2',
-            'content-type': 'application/json',
-        }
-        
-        # Устанавливаем заголовки в сессию
-        session.headers.update(headers)
-        
-        # Отправляем запрос на запись (используем URL из примера)
-        base_url = MedscanAuthClient.BASE_URL
-        reserve_url = f"{base_url}/api/reservation/reserve"
-        
-        response = session.post(
-            reserve_url,
-            json=reserve_data,
-            timeout=30
-        )
-        
-        logging.info(f"Статус ответа: {response.status_code}")
-        logging.info(f"Ответ сервера: {response.text[:500]}")
-        
-        if response.status_code == 200:
-            try:
-                response_data = response.json()
-                # Проверяем успешность записи
-                if response_data.get('success') or 'error' not in str(response_data).lower():
-                    # Формируем сообщение с датой и временем
-                    message = "✅ Запись на прием успешно создана!\n\n"
-                    if selected_date_str and selected_time_str:
-                        # Форматируем дату из YYYYMMDD в DD.MM.YYYY
-                        try:
-                            from datetime import datetime as dt
-                            date_obj = dt.strptime(selected_date_str, "%Y%m%d")
-                            formatted_date = date_obj.strftime("%d.%m.%Y")
-                            message += f"📅 Дата: {formatted_date}\n"
-                            message += f"🕐 Время: {selected_time_str}\n\n"
-                        except:
-                            # Если не удалось распарсить дату, используем как есть
-                            message += f"📅 Дата: {selected_date_str}\n"
-                            message += f"🕐 Время: {selected_time_str}\n\n"
-                    message += "Запись подтверждена. Ожидайте подтверждения."
-                    return True, message
-                else:
-                    error_msg = response_data.get('message', 'Неизвестная ошибка')
-                    return False, f"❌ Ошибка при записи: {error_msg}"
-            except:
-                # Если ответ не JSON, но статус 200, считаем успешным
-                message = "✅ Запись на прием успешно создана!\n\n"
-                if selected_date_str and selected_time_str:
-                    try:
-                        from datetime import datetime as dt
-                        date_obj = dt.strptime(selected_date_str, "%Y%m%d")
-                        formatted_date = date_obj.strftime("%d.%m.%Y")
-                        message += f"📅 Дата: {formatted_date}\n"
-                        message += f"🕐 Время: {selected_time_str}\n\n"
-                    except:
-                        message += f"📅 Дата: {selected_date_str}\n"
-                        message += f"🕐 Время: {selected_time_str}\n\n"
-                message += "Запись подтверждена. Ожидайте подтверждения."
-                return True, message
-        else:
-            try:
-                error_data = response.json()
-                error_msg = error_data.get('message', f'HTTP {response.status_code}')
-            except:
-                error_msg = f'HTTP {response.status_code}'
-            
-            # Проверяем, не занято ли время
-            if 'занят' in error_msg.lower() or 'busy' in error_msg.lower() or 'занято' in error_msg.lower():
-                return False, f"❌ Выбранное время уже занято. Пожалуйста, выберите другое время."
-            
-            return False, f"❌ Ошибка при записи: {error_msg}"
-    
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Ошибка сети при записи: {e}")
-        return False, f"❌ Ошибка соединения при записи. Попробуйте позже."
-    except Exception as e:
-        logging.error(f"Неизвестная ошибка при записи: {e}", exc_info=True)
-        return False, f"❌ Произошла ошибка при записи: {str(e)}"
-
-
 async def get_doctor_schedule(
     doctor_dcode: int | str | None = None,
     filial_id: int | str | None = None,
@@ -895,10 +773,38 @@ def create_calendar_keyboard(doctor_name: str, branch_name: str, department_name
     return text, builder
 
 
-def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str, department_name: str, selected_date: date | str):
-    """Форматирует информацию о графике работы врача и ближайших доступных временах с кнопками"""
-    from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
-    
+def format_schedule_info(
+        intervals_data: dict,
+        doctor_name: str,
+        branch_name: str,
+        department_name: str,
+        selected_date: date | str,
+        doctor_dcode: int | str
+):
+    """Форматирует информацию о графике работы врача и ближайших доступных временах с кнопками
+    Использует данные из get_reservation_intervals в формате:
+    {
+        "data": [
+            {
+                "workdates": [
+                    {
+                        "20260121": [
+                            {
+                                "schedident": 40075621,
+                                "rnum": "202",
+                                "dcode": 990102079,
+                                "intervals": [
+                                    {"time": "08:00-08:30", "isFree": false},
+                                    {"time": "09:30-10:00", "isFree": true}
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    """
     # Преобразуем дату в строку формата YYYYMMDD
     if isinstance(selected_date, date):
         selected_date_str = selected_date.strftime("%Y%m%d")
@@ -928,10 +834,9 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
     
     # Создаем клавиатуру для выбора времени
     builder = InlineKeyboardBuilder()
-    available_times = []
     
-    # Извлекаем данные из ответа API
-    data_list = schedule_data.get('data', [])
+    # Извлекаем данные из ответа get_reservation_intervals
+    data_list = intervals_data.get('data', [])
     
     # Собираем все доступные интервалы на выбранную дату
     date_intervals = []
@@ -940,56 +845,76 @@ def format_schedule_info(schedule_data: dict, doctor_name: str, branch_name: str
         if not isinstance(item, dict):
             continue
         
-        intervals = item.get('intervals', [])
-        for interval in intervals:
-            # Проверяем, что интервал свободен, доступен и на выбранную дату
-            work_date = str(interval.get('workDate', ''))
-            is_free = interval.get('isFree', False)
-            is_available = interval.get('isAvailable', False)
+        workdates = item.get('workdates', [])
+        for workdate_item in workdates:
+            if not isinstance(workdate_item, dict):
+                continue
             
-            if work_date == selected_date_str and is_free and is_available:
-                start_interval = interval.get('startInterval', '')
-                if start_interval:
-                    # Сохраняем дополнительную информацию для последующего использования
-                    interval_info = {
-                        'time': start_interval,
-                        'schedident': interval.get('schedident'),
-                        'filial': interval.get('filial'),
-                        'filialName': interval.get('filialName', ''),
-                        'workDate': work_date,
-                        'endInterval': interval.get('endInterval', '')
-                    }
-                    date_intervals.append(interval_info)
+            # Ищем данные для выбранной даты
+            if selected_date_str in workdate_item:
+                date_data = workdate_item[selected_date_str]
+                if isinstance(date_data, list):
+                    for schedule_item in date_data:
+                        if not isinstance(schedule_item, dict):
+                            continue
+                        
+                        # Проверяем, что это нужный врач
+                        if str(schedule_item.get('dcode', '')) != str(doctor_dcode):
+                            continue
+                        
+                        schedident = schedule_item.get('schedident')
+                        intervals = schedule_item.get('intervals', [])
+                        
+                        for interval in intervals:
+                            if not isinstance(interval, dict):
+                                continue
+                            
+                            # Проверяем, что интервал свободен
+                            is_free = interval.get('isFree', False)
+                            time_str = interval.get('time', '')
+                            
+                            if is_free and time_str:
+                                # Сохраняем информацию об интервале
+                                interval_info = {
+                                    'time': time_str,  # Формат "09:30-10:00"
+                                    'schedident': schedident,
+                                    'workDate': selected_date_str,
+                                    'dcode': doctor_dcode
+                                }
+                                date_intervals.append(interval_info)
     
-    # Сортируем интервалы по времени и убираем дубликаты
-    # Группируем по времени (может быть несколько интервалов с одинаковым временем начала)
-    time_map = {}
-    for interval in date_intervals:
-        time_key = interval['time']
-        if time_key not in time_map:
-            time_map[time_key] = interval
+    # Сортируем интервалы по времени начала
+    def get_start_time(time_str: str) -> str:
+        """Извлекает время начала из интервала (09:30-10:00 -> 09:30)"""
+        if '-' in time_str:
+            return time_str.split('-')[0].strip()
+        return time_str
     
-    # Формируем список уникальных времен и сортируем
-    available_times_data = sorted(time_map.values(), key=lambda x: x['time'])
-    available_times = [item['time'] for item in available_times_data]  # Берем все доступные времена
+    date_intervals.sort(key=lambda x: get_start_time(x['time']))
     
-    if available_times:
+    if date_intervals:
         text_parts.append('')
     else:
-        text_parts.append(f'\n⏰ На выбранную дату свободное время отсутствует.')
-        text_parts.append(f'Попробуйте выбрать другую дату.')
+        text_parts.append('\n⏰ На выбранную дату свободное время отсутствует.')
+        text_parts.append('Попробуйте выбрать другую дату.')
     
-    # Создаем кнопки для каждого времени (по 2 кнопки в ряд)
-    for i in range(0, len(available_times), 2):
-        row_times = available_times[i:i+2]
+    # Создаем кнопки для каждого интервала времени (по 2 кнопки в ряд)
+    for i in range(0, len(date_intervals), 2):
+        row_intervals = date_intervals[i:i+2]
         buttons = []
-        for time in row_times:
-            # Формируем payload с информацией об интервале
-            interval_data = time_map[time]
-            payload_data = f"{time.replace(':', '')}_{interval_data['schedident']}_{interval_data['workDate']}"
+        for interval_info in row_intervals:
+            time_str = interval_info['time']  # Формат "09:30-10:00"
+            schedident = interval_info['schedident']
+            work_date = interval_info['workDate']
+            
+            # Формируем payload: time_schedident_workDate
+            # Для времени "09:30-10:00" используем только начало "09:30" в payload
+            time_start = get_start_time(time_str)
+            payload_data = f"{time_start.replace(':', '')}_{schedident}_{work_date}"
+            
             buttons.append(
                 CallbackButton(
-                    text=time,
+                    text=time_str,  # Отображаем полный интервал "09:30-10:00"
                     payload=f'time_{payload_data}'
                 )
             )
@@ -1069,24 +994,39 @@ async def handle_date_selection(event: MessageCallback, context: MemoryContext):
             doctor_dcode = safe_int(doctor_id)
         
         # Получаем ID филиала
-        filial_id = safe_int(branch_id)
+        safe_int(branch_id)
         
-        # Получаем график работы врача на выбранную дату
-        schedule_data = await get_doctor_schedule(
-            doctor_dcode=doctor_dcode,
-            filial_id=filial_id,
-            online_mode=1,
-            start_date=selected_date,
-            end_date=selected_date + timedelta(days=1)
-        )
+        # Получаем интервалы записи на выбранную дату через get_reservation_intervals
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=settings.INFOCLINICA_COOKIES,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS
+        ) as client:
+            # Используем следующий день как en для получения интервалов
+            next_day = (selected_date + timedelta(days=1)).strftime("%Y%m%d")
+            selected_date_str = selected_date.strftime("%Y%m%d")
+            
+            intervals_result = await client.get_reservation_intervals(
+                st=selected_date_str,
+                en=next_day,
+                dcode=doctor_dcode,
+                online_mode=0
+            )
+            
+            # Извлекаем данные из ответа
+            if intervals_result.status_code == 200 and intervals_result.json:
+                intervals_data = intervals_result.json
+            else:
+                intervals_data = {}
         
         # Форматируем информацию о графике (возвращает текст и клавиатуру)
         schedule_text, time_keyboard = format_schedule_info(
-            schedule_data, 
+            intervals_data, 
             doctor_name, 
             branch_name, 
             department_name, 
-            selected_date
+            selected_date,
+            doctor_dcode
         )
         
         # Отправляем информацию о графике с кнопками времени
@@ -1098,8 +1038,8 @@ async def handle_date_selection(event: MessageCallback, context: MemoryContext):
     except Exception as e:
         logging.error(f"Ошибка при получении расписания на дату: {e}")
         await event.message.answer(
-            f'❌ Ошибка при загрузке расписания на выбранную дату.\n\n'
-            f'Попробуйте выбрать другую дату или обратитесь в поддержку.'
+            '❌ Ошибка при загрузке расписания на выбранную дату.\n\n'
+            'Попробуйте выбрать другую дату или обратитесь в поддержку.'
         )
 
 
@@ -1245,16 +1185,16 @@ async def handle_back_to_branches(event: MessageCallback, context: MemoryContext
 
 @dp.message_callback(F.callback.payload.startswith('time_'))
 async def handle_time_selection(event: MessageCallback, context: MemoryContext):
-    # Извлекаем данные из payload (формат: time_1700_30017859_20260116)
-    # где 1700 - время, 30017859 - schedident, 20260116 - дата
+    # Извлекаем данные из payload (формат: time_0930_40075621_20260121)
+    # где 0930 - время начала (HHMM), 40075621 - schedident, 20260121 - дата
     payload_parts = event.callback.payload.replace('time_', '').split('_')
     
     if len(payload_parts) >= 3:
-        time_str = payload_parts[0]  # Время в формате HHMM
+        time_str = payload_parts[0]  # Время в формате HHMM (например, 0930)
         schedident = payload_parts[1]  # ID расписания
         work_date = payload_parts[2]  # Дата в формате YYYYMMDD
         
-        # Восстанавливаем формат времени (1700 -> 17:00)
+        # Восстанавливаем формат времени (0930 -> 09:30)
         if len(time_str) == 4:
             selected_time = f"{time_str[:2]}:{time_str[2:]}"
         else:
@@ -1305,6 +1245,17 @@ async def handle_time_selection(event: MessageCallback, context: MemoryContext):
     # Сохраняем выбранное время
     await context.update_data(selected_time=selected_time)
     
+    # Получаем дату из контекста и форматируем её
+    selected_work_date = data.get('selected_work_date') or work_date if len(payload_parts) >= 3 else None
+    date_display = "Дата не указана"
+    if selected_work_date:
+        try:
+            # Парсим дату из формата YYYYMMDD
+            date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
+            date_display = date_obj.strftime("%d.%m.%Y")
+        except (ValueError, TypeError):
+            date_display = selected_work_date
+    
     await event.message.delete()
     
     # Показываем кнопки выбора: есть аккаунт или новый пользователь
@@ -1330,6 +1281,7 @@ async def handle_time_selection(event: MessageCallback, context: MemoryContext):
     
     await event.message.answer(
         text=f'✅ Вы выбрали время: {selected_time}\n\n'
+        f'📅 Дата: {date_display}\n'
         f'📍 Филиал: {branch_name}\n'
         f'🏥 Отделение: {department_name}\n'
         f'👨‍⚕️ Врач: {doctor_name}\n\n'
@@ -1417,85 +1369,77 @@ async def handle_login_password(event: MessageCreated, context: MemoryContext):
     password = event.message.body.text
     
     try:
-        # Выполняем вход через модуль авторизации (логика из auth.py)
-        # Запускаем синхронную функцию в отдельном потоке
-        result = await asyncio.to_thread(authorize_user, username, password)
-        
-        # Проверяем результат
-        if result.get('success'):
-            await context.set_state(None)
+        # Выполняем вход через InfoClinicaClient
+        async with InfoClinicaClient() as client:
+            result = await client.authorize_user(username, password)
             
-            # Формируем сообщение с информацией о пользователе
-            user_info = []
-            if result.get('full_name'):
-                user_info.append(f'👤 Имя: {result.get("full_name")}')
-            if result.get('email'):
-                user_info.append(f'📧 Email: {result.get("email")}')
-            if result.get('phone'):
-                user_info.append(f'📱 Телефон: {result.get("phone")}')
-            
-            message = f'✅ Вход выполнен успешно!\n\n'
-            if user_info:
-                message += '\n'.join(user_info) + '\n\n'
-            message += f'Логин: {username}'
-            
-            await event.message.answer(message)
-            await create_keyboard(event)
-            
-            # Сохраняем данные сессии в контекст для дальнейшего использования
-            await context.update_data(
-                authenticated=True,
-                user_id=result.get('user_id'),
-                session_data=result
-            )
-            
-            # Если есть выбранное время, выполняем запись на прием
-            data = await context.get_data()
-            selected_time = data.get('selected_time')
-            selected_work_date = data.get('selected_work_date')
-            selected_schedident = data.get('selected_schedident')
-            selected_doctor_dcode = data.get('selected_doctor_dcode')
-            selected_branch_id = data.get('selected_branch_id')
-            selected_department_id = data.get('selected_department_id')
-            
-            if selected_time and selected_work_date and selected_schedident and selected_doctor_dcode:
-                # Получаем сессию из результата авторизации
-                session = result.get('session')
-                if not session:
-                    logging.error("Сессия не найдена в результате авторизации")
-                    await event.message.answer(
-                        '❌ Ошибка: сессия авторизации не найдена. Попробуйте войти снова.'
-                    )
-                    return
+            # Проверяем результат
+            if result.get('success'):
+                await context.set_state(None)
                 
-                # Проверяем, что сессия содержит куки
-                if not session.cookies:
-                    logging.error("Сессия не содержит куки")
-                    await event.message.answer(
-                        '❌ Ошибка: сессия не содержит куки авторизации. Попробуйте войти снова.'
-                    )
-                    return
+                # Формируем сообщение с информацией о пользователе
+                user_info = []
+                if result.get('full_name'):
+                    user_info.append(f'👤 Имя: {result.get("full_name")}')
+                if result.get('email'):
+                    user_info.append(f'📧 Email: {result.get("email")}')
+                if result.get('phone'):
+                    user_info.append(f'📱 Телефон: {result.get("phone")}')
                 
-                # Собираем куки так же, как в auth.py
-                cookies_list = [cookie.name for cookie in session.cookies]
-                logging.info(f"Используем сессию с куками: {cookies_list}")
+                message = '✅ Вход выполнен успешно!\n\n'
+                if user_info:
+                    message += '\n'.join(user_info) + '\n\n'
+                message += f'Логин: {username}'
                 
-                if session:
+                await event.message.answer(message)
+                await create_keyboard(event)
+                
+                # Получаем cookies из авторизованного клиента
+                authorized_client = result.get('client') or client
+                cookies_dict = {}
+                if authorized_client and authorized_client._client_json.cookies:
+                    cookies_dict = dict(authorized_client._client_json.cookies)
+                
+                # Сохраняем данные сессии в контекст для дальнейшего использования
+                await context.update_data(
+                    authenticated=True,
+                    user_id=result.get('user_id'),
+                    session_data=result,
+                    auth_cookies=cookies_dict  # Сохраняем cookies для создания нового клиента при необходимости
+                )
+                
+                # Если есть выбранное время, выполняем запись на прием
+                data = await context.get_data()
+                selected_time = data.get('selected_time')
+                selected_work_date = data.get('selected_work_date')
+                selected_schedident = data.get('selected_schedident')
+                selected_doctor_dcode = data.get('selected_doctor_dcode')
+                selected_branch_id = data.get('selected_branch_id')
+                selected_department_id = data.get('selected_department_id')
+                
+                if selected_time and selected_work_date and selected_schedident and selected_doctor_dcode:
+                    # Проверяем наличие cookies
+                    if not cookies_dict:
+                        logging.error("Cookies не найдены")
+                        await event.message.answer(
+                            '❌ Ошибка: cookies авторизации не найдены. Попробуйте войти снова.'
+                        )
+                        return
+                    
+                    # Собираем список cookies для логирования
+                    cookies_list = list(cookies_dict.keys())
+                    logging.info(f"Используем cookies: {cookies_list}")
+                    
+                    # Создаем новый клиент с сохраненными cookies для выполнения записи
                     try:
-                        # Получаем интервалы для получения depnum и проверки свободности
-                        # Используем InfoClinicaClient для получения интервалов
-                        async with InfoClinicaClient(
-                            base_url=settings.INFOCLINICA_BASE_URL,
-                            cookies=settings.INFOCLINICA_COOKIES,
-                            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS
-                        ) as client:
+                        async with InfoClinicaClient(cookies=cookies_dict) as reservation_client:
+                            
                             # Получаем интервалы на выбранную дату
                             # Используем следующий день как en для получения интервалов
-                            from datetime import datetime as dt
-                            work_date_obj = dt.strptime(selected_work_date, "%Y%m%d").date()
+                            work_date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
                             next_day = (work_date_obj + timedelta(days=1)).strftime("%Y%m%d")
                             
-                            intervals_result = await client.get_reservation_intervals(
+                            intervals_result = await reservation_client.get_reservation_intervals(
                                 st=selected_work_date,
                                 en=next_day,
                                 dcode=selected_doctor_dcode,
@@ -1541,7 +1485,7 @@ async def handle_login_password(event: MessageCreated, context: MemoryContext):
                                     is_free = found_interval.get('isFree', True)
                                     if not is_free:
                                         await event.message.answer(
-                                            f'❌ Выбранное время уже занято. Пожалуйста, выберите другое время.'
+                                            '❌ Выбранное время уже занято. Пожалуйста, выберите другое время.'
                                         )
                                         return
                                 
@@ -1552,27 +1496,38 @@ async def handle_login_password(event: MessageCreated, context: MemoryContext):
                                 reserve_data = {
                                     "date": selected_work_date,
                                     "dcode": int(selected_doctor_dcode),
+                                    "depnum": int(depnum) if depnum else 0,
                                     "en": end_time,
                                     "filial": int(selected_branch_id) if selected_branch_id else 0,
-                                    "onlineType": 0,
-                                    "schedident": int(selected_schedident),
                                     "st": selected_time,
-                                    "depnum": int(depnum) if depnum else 0,
-                                    "refid": ""  # Добавляем обязательное поле refid (может быть пустым)
+                                    "timezone": 3,  # Часовой пояс (3 = Москва)
+                                    "schedident": int(selected_schedident),
+                                    "services": [],  # Список услуг (обычно пустой)
+                                    "onlineType": 0,
+                                    "refid": None,  # ID реферала (может быть null)
+                                    "schedid": None,  # ID расписания (может быть null)
+                                    "deviceDetect": 2  # Тип устройства (2 = desktop/web)
                                 }
                                 
                                 # Логируем данные для отладки
                                 logging.info(f"Формируем запись на прием: {reserve_data}")
-                                logging.info(f"Сессия доступна: {session is not None}")
-                                if session:
-                                    # Собираем куки так же, как в auth.py
-                                    cookies_list = [cookie.name for cookie in session.cookies]
-                                    logging.info(f"Куки в сессии: {cookies_list}")
+                                logging.info(f"Клиент доступен: {authorized_client is not None}")
+                                if authorized_client:
+                                    # Собираем куки из клиента
+                                    cookies_list = list(authorized_client._client_json.cookies.keys())
+                                    logging.info(f"Куки в клиенте: {cookies_list}")
                                 
-                                # Выполняем запись (синхронная функция в отдельном потоке)
-                                success, reservation_message = await asyncio.to_thread(
-                                    make_reservation, session, reserve_data, selected_work_date, selected_time
-                                )
+                                # Выполняем запись через InfoClinicaClient
+                                reserve_payload = InfoClinicaReservationReservePayload(**reserve_data)
+                                reserve_result = await reservation_client.reserve(reserve_payload)
+                                
+                                if reserve_result.status_code == 200 and reserve_result.json:
+                                    success = True
+                                    reservation_message = f'✅ Запись на прием успешно создана!\nДата: {selected_work_date}\nВремя: {selected_time}'
+                                else:
+                                    success = False
+                                    error_msg = reserve_result.json.get('error') if reserve_result.json else reserve_result.text
+                                    reservation_message = f'❌ Ошибка при создании записи: {error_msg or "Неизвестная ошибка"}'
                                 
                                 if success:
                                     await event.message.answer(reservation_message)
@@ -1588,17 +1543,17 @@ async def handle_login_password(event: MessageCreated, context: MemoryContext):
                             f'⚠️ Произошла ошибка при создании записи: {str(e)}\n\n'
                             f'Попробуйте позже или обратитесь в поддержку.'
                         )
-        else:
-            error_msg = result.get('error', 'Ошибка входа')
-            await event.message.answer(
-                f'❌ Ошибка входа: {error_msg}\n\n'
-                f'Попробуйте еще раз.'
-            )
+            else:
+                error_msg = result.get('error', 'Ошибка входа')
+                await event.message.answer(
+                    f'❌ Ошибка входа: {error_msg}\n\n'
+                    f'Попробуйте еще раз.'
+                )
     except Exception as e:
         logging.error(f"Ошибка при входе: {e}", exc_info=True)
         await event.message.answer(
-            f'❌ Произошла ошибка при входе.\n\n'
-            f'Попробуйте позже или обратитесь в поддержку.'
+            '❌ Произошла ошибка при входе.\n\n'
+            'Попробуйте позже или обратитесь в поддержку.'
         )
 
 
@@ -1770,8 +1725,8 @@ async def handle_accept_personal_data(event: MessageCallback, context: MemoryCon
         logging.error(f"Ошибка при регистрации: {e}")
         await event.message.delete()
         await event.message.answer(
-            f'❌ Произошла ошибка при регистрации.\n\n'
-            f'Попробуйте позже или обратитесь в поддержку.'
+            '❌ Произошла ошибка при регистрации.\n\n'
+            'Попробуйте позже или обратитесь в поддержку.'
         )
 
 
