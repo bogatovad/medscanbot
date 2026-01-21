@@ -255,7 +255,7 @@ async def handle_info_mission(event: MessageCallback, context: MemoryContext):
     )
     
     builder = InlineKeyboardBuilder()
-
+ 
     builder.row(
         CallbackButton(
             text='🔙 Назад',
@@ -263,10 +263,26 @@ async def handle_info_mission(event: MessageCallback, context: MemoryContext):
         )
     )
     
+    # Добавление изображения
+    attachments = [builder.as_markup()]
+    
+    image_url = "https://habrastorage.org/webt/hq/fe/ui/hqfeui_hs7pynvx3benxl9xuaqi.png"
+    temp_image_path = await download_image_to_temp(image_url)
+    if temp_image_path:
+        photo = InputMedia(path=temp_image_path)
+        attachments.insert(0, photo)
+    
     await event.message.answer(
         text=mission_text,
-        attachments=[builder.as_markup()]
+        attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_organizations')
@@ -413,6 +429,13 @@ async def handle_info_yauza(event: MessageCallback, context: MemoryContext):
         text=yauza_text,
         attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_medscan_llc')
@@ -449,6 +472,13 @@ async def handle_info_medscan_llc(event: MessageCallback, context: MemoryContext
         text=medscan_llc_text,
         attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_medassist_kursk')
@@ -495,6 +525,13 @@ async def handle_info_medassist_kursk(event: MessageCallback, context: MemoryCon
         text=medassist_kursk_text,
         attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_medical_on_group')
@@ -537,6 +574,13 @@ async def handle_info_medical_on_group(event: MessageCallback, context: MemoryCo
         text=medical_on_group_text,
         attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_kdl')
@@ -577,6 +621,13 @@ async def handle_info_kdl(event: MessageCallback, context: MemoryContext):
         text=kdl_text,
         attachments=attachments
     )
+    
+    # Удаляем временный файл после отправки
+    if temp_image_path and os.path.exists(temp_image_path):
+        try:
+            os.unlink(temp_image_path)
+        except Exception:
+            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_contacts')
@@ -605,6 +656,106 @@ async def handle_info_contacts(event: MessageCallback, context: MemoryContext):
     
     await event.message.answer(
         text=contacts_text,
+        attachments=[builder.as_markup()]
+    )
+
+
+@dp.message_callback(F.callback.payload == 'back_to_auth_choice')
+async def handle_back_to_auth_choice(event: MessageCallback, context: MemoryContext):
+    """Возврат к выбору: есть аккаунт или новый пользователь"""
+    await context.set_state(None)
+    await event.message.delete()
+    
+    # Получаем данные из контекста для восстановления информации о выбранном времени
+    data = await context.get_data()
+    selected_time = data.get('selected_time')
+    selected_work_date = data.get('selected_work_date')
+    
+    if selected_time and selected_work_date:
+        # Получаем информацию о выбранных данных
+        branch_id = data.get('selected_branch_id')
+        department_id = data.get('selected_department_id')
+        doctor_id = data.get('selected_doctor_id')
+        doctor_dcode = data.get('selected_doctor_dcode')
+        branches = data.get('branches_list', [])
+        departments = data.get('departments_list', [])
+        doctors = data.get('doctors_list', [])
+        
+        branch_name = "Филиал"
+        for branch in branches:
+            if str(branch.get("id")) == branch_id:
+                branch_name = branch.get("name", "Филиал")
+                break
+        
+        department_name = "Отделение"
+        for department in departments:
+            if str(department.get("id")) == department_id:
+                department_name = department.get("name", "Отделение")
+                break
+        
+        doctor_name = "Врач"
+        for doctor in doctors:
+            if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
+                doctor_name = doctor.get("name", "Врач")
+                break
+        
+        # Показываем кнопки выбора: есть аккаунт или новый пользователь
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            CallbackButton(
+                text='✅ У меня есть аккаунт',
+                payload='has_account'
+            )
+        )
+        builder.row(
+            CallbackButton(
+                text='➕ Новый пользователь',
+                payload='new_user'
+            )
+        )
+        builder.row(
+            CallbackButton(
+                text='🔙 Назад к выбору даты',
+                payload='back_to_schedule'
+            )
+        )
+        
+        # Форматируем дату для отображения
+        try:
+            date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
+            date_display = date_obj.strftime("%d.%m.%Y")
+        except (ValueError, TypeError):
+            date_display = selected_work_date
+        
+        await event.message.answer(
+            text=f'✅ Вы выбрали время: {selected_time}\n\n'
+            f'📅 Дата: {date_display}\n'
+            f'📍 Филиал: {branch_name}\n'
+            f'🏥 Отделение: {department_name}\n'
+            f'👨‍⚕️ Врач: {doctor_name}\n\n'
+            f'Для продолжения нужно войти в систему или зарегистрироваться.',
+            attachments=[builder.as_markup()]
+        )
+    else:
+        await create_keyboard(event)
+
+
+@dp.message_callback(F.callback.payload == 'back_to_login_username')
+async def handle_back_to_login_username(event: MessageCallback, context: MemoryContext):
+    """Возврат к вводу логина"""
+    await context.set_state(LoginForm.username)
+    await event.message.delete()
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад',
+            payload='back_to_auth_choice'
+        )
+    )
+    
+    await event.message.answer(
+        text='Введите ваш логин:',
         attachments=[builder.as_markup()]
     )
 
@@ -1795,7 +1946,19 @@ async def handle_has_account(event: MessageCallback, context: MemoryContext):
     """Обработчик кнопки 'У меня есть аккаунт'"""
     await context.set_state(LoginForm.username)
     await event.message.delete()
-    await event.message.answer('Введите ваш логин:')
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад',
+            payload='back_to_auth_choice'
+        )
+    )
+    
+    await event.message.answer(
+        text='Введите ваш логин:',
+        attachments=[builder.as_markup()]
+    )
 
 
 @dp.message_callback(F.callback.payload == 'new_user')
@@ -1811,7 +1974,19 @@ async def handle_login_username(event: MessageCreated, context: MemoryContext):
     """Обработка ввода логина"""
     await context.update_data(login_username=event.message.body.text)
     await context.set_state(LoginForm.password)
-    await event.message.answer('Введите ваш пароль:')
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад',
+            payload='back_to_login_username'
+        )
+    )
+    
+    await event.message.answer(
+        text='Введите ваш пароль:',
+        attachments=[builder.as_markup()]
+    )
 
 
 @dp.message_created(F.message.body.text, LoginForm.password)
