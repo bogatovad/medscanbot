@@ -9,7 +9,16 @@ import httpx
 
 from maxapi import F
 from maxapi.context import MemoryContext, State, StatesGroup
-from maxapi.types import BotStarted, Command, MessageCreated, CallbackButton, MessageCallback, BotCommand, InputMedia
+from maxapi.types import (
+    BotStarted,
+    Command,
+    MessageCreated,
+    CallbackButton,
+    MessageCallback,
+    BotCommand,
+    InputMedia,
+    LinkButton,
+)
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from app.providers.infoclinica_client import InfoClinicaClient
@@ -136,6 +145,12 @@ async def handle_start_command(event: MessageCreated):
     )
     builder.row(
         CallbackButton(
+            text='✍️ Подписать',
+            payload='btn_sign_documents'
+        )
+    )
+    builder.row(
+        CallbackButton(
             text='ℹ️ Информация о Медскан',
             payload='btn_info'
         )
@@ -162,6 +177,12 @@ async def create_keyboard(event):
         CallbackButton(
             text='➕ Записаться на прием',
             payload='btn_make_appointment'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='✍️ Подписать',
+            payload='btn_sign_documents'
         )
     )
     builder.row(
@@ -770,6 +791,54 @@ async def handle_back_to_main(event: MessageCallback, context: MemoryContext):
 async def handle_current_appointment_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     await event.message.answer('Функция "Текущая запись" в разработке')
+    await create_keyboard(event)
+
+
+@dp.message_callback(F.callback.payload == 'btn_sign_documents')
+async def handle_sign_documents_button(event: MessageCallback, context: MemoryContext):
+    await event.message.delete()
+
+    text = (
+        'Чтобы подписать документы:\n'
+        '1. Вам напишет бот «Госключ» @goskey_bot\n'
+        '2. Перейдите в него и нажмите «Подписать на госуслугах»\n'
+        '3. Подпишите документы на Госуслугах\n'
+        '4. После этого мы загрузим подписанные документы\n\n'
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        LinkButton(
+            text='Перейти в Госключ',
+            url='https://max.ru/goskey_bot'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='✅ Я подписал',
+            payload='btn_goskey_signed'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='🔙 Назад',
+            payload='back_to_main'
+        )
+    )
+
+    await event.message.answer(
+        text=text,
+        attachments=[builder.as_markup()]
+    )
+
+
+@dp.message_callback(F.callback.payload == 'btn_goskey_signed')
+async def handle_goskey_signed(event: MessageCallback, context: MemoryContext):
+    await event.message.delete()
+    logging.info("Пользователь подтвердил подписание документов через Госключ.")
+    await event.message.answer(
+        text='Спасибо! Мы загрузим подписанные документы и сообщим, когда они будут готовы.'
+    )
     await create_keyboard(event)
 
 

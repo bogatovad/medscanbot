@@ -10,6 +10,10 @@ class Settings(BaseSettings):
 
     MAX_BOT_TOKEN: str = ""
 
+    EXT_API_URL: str = "https://ext-api.max.ru"
+    EXT_API_TOKEN: str = ""
+    EXT_API_TIMEOUT_SECONDS: float = 30.0
+
     model_config = SettingsConfigDict(env_file=".env")
 
 
