@@ -14,6 +14,15 @@ class Settings(BaseSettings):
     EXT_API_TOKEN: str = ""
     EXT_API_TIMEOUT_SECONDS: float = 30.0
 
+    MAX_API_URL: str = "https://platform-api.max.ru"
+    MAX_API_AUTH_TOKEN: str = ""
+    MAX_API_TIMEOUT_SECONDS: float = 30.0
+
+    REDIS_URL: str = "redis://:@redis:6379/0"
+    CELERY_BROKER: str = REDIS_URL
+
+    MEDIA_ROOT: str = "media"
+
     model_config = SettingsConfigDict(env_file=".env")
 
 
