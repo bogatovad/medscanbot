@@ -1208,12 +1208,20 @@ async def create_branches_keyboard(event, context: MemoryContext, page: int = 0)
 @dp.message_callback(F.callback.payload == 'btn_make_appointment')
 async def handle_make_appointment_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
-    
+    id_max = context.user_id
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+    if not user:
+        await event.message.answer(
+            "Для записи на прием необходима регистрация в системе. Пожалуйста, зарегистрируйтесь."
+        )
+        await create_keyboard(event, context)
+        return
     # Очищаем предыдущие данные о филиалах
     await context.update_data(branches_list=None, branches_page=0)
-    
     builder, text = await create_branches_keyboard(event, context, page=0)
-    
     await event.message.answer(
         text=text,
         attachments=[builder.as_markup()]
@@ -2207,18 +2215,11 @@ async def handle_time_selection(event: MessageCallback, context: MemoryContext):
     
     await event.message.delete()
     
-    # Показываем кнопки выбора: есть аккаунт или новый пользователь
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(
-            text='✅ У меня есть аккаунт',
-            payload='has_account'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='➕ Новый пользователь',
-            payload='new_user'
+            text='✅ Подтвердить запись',
+            payload='btn_confirm_reservation'
         )
     )
     builder.row(
@@ -2234,9 +2235,180 @@ async def handle_time_selection(event: MessageCallback, context: MemoryContext):
         f'📍 Филиал: {branch_name}\n'
         f'🏥 Отделение: {department_name}\n'
         f'👨‍⚕️ Врач: {doctor_name}\n\n'
-        f'Для продолжения нужно войти в систему или зарегистрироваться.',
+        f'Нажмите «Подтвердить запись», чтобы записаться на приём.',
         attachments=[builder.as_markup()]
     )
+
+
+@dp.message_callback(F.callback.payload == 'btn_confirm_reservation')
+async def handle_confirm_reservation(event: MessageCallback, context: MemoryContext):
+    """Подтверждение записи: авторизация в МИС по данным из БД и создание записи."""
+    await event.message.delete()
+    id_max = context.user_id
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+    if not user:
+        await event.message.answer(
+            'Пользователь не найден. Для записи на приём необходимо зарегистрироваться в системе.'
+        )
+        await create_keyboard(event, context)
+        return
+    data = await context.get_data()
+    selected_time = data.get('selected_time')
+    selected_work_date = data.get('selected_work_date')
+    selected_schedident = data.get('selected_schedident')
+    selected_doctor_dcode = data.get('selected_doctor_dcode')
+    selected_branch_id = data.get('selected_branch_id')
+    selected_department_id = data.get('selected_department_id')
+    if not (selected_time and selected_work_date and selected_schedident and selected_doctor_dcode):
+        await event.message.answer(
+            'Недостаточно данных для записи. Начните выбор времени заново.'
+        )
+        await create_keyboard(event, context)
+        return
+    try:
+        cookies_dict = {}
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=settings.INFOCLINICA_COOKIES,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+        ) as client:
+            result = await client.authorize_user(user.cllogin, user.clpassword)
+            if result.get('success') and client._client_json.cookies:
+                cookies_dict = dict(client._client_json.cookies)
+        if not result.get('success'):
+            error_msg = result.get('error', 'Ошибка авторизации в МИС')
+            await event.message.answer(
+                f'❌ Не удалось войти в систему записи: {error_msg}\n\n'
+                'Проверьте логин и пароль в личном кабинете или обратитесь в поддержку.'
+            )
+            await create_keyboard(event, context)
+            return
+        if not cookies_dict:
+            await event.message.answer(
+                '❌ Ошибка: сессия авторизации не получена. Попробуйте позже.'
+            )
+            await create_keyboard(event, context)
+            return
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=cookies_dict,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+        ) as reservation_client:
+            work_date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
+            next_day = (work_date_obj + timedelta(days=1)).strftime("%Y%m%d")
+            intervals_result = await reservation_client.get_reservation_intervals(
+                st=selected_work_date,
+                en=next_day,
+                dcode=selected_doctor_dcode,
+                online_mode=0,
+            )
+            if intervals_result.status_code != 200 or not intervals_result.json:
+                await event.message.answer(
+                    '⚠️ Не удалось проверить доступность времени. Попробуйте позже.'
+                )
+                await create_keyboard(event, context)
+                return
+            intervals = intervals_result.json
+            intervals_list = (
+                intervals
+                if isinstance(intervals, list)
+                else (intervals.get('intervals', []) if isinstance(intervals, dict) else [])
+            )
+            depnum = None
+            found_interval = None
+            for interval in intervals_list:
+                interval_schedident = interval.get('schedident') or interval.get('schedIdent')
+                interval_time = interval.get('startInterval') or interval.get('start')
+                if (
+                    str(interval_schedident) == str(selected_schedident)
+                    and interval_time == selected_time
+                ):
+                    depnum = interval.get('depnum') or interval.get('depNum')
+                    found_interval = interval
+                    break
+            if not depnum and intervals_list:
+                for interval in intervals_list:
+                    interval_time = interval.get('startInterval') or interval.get('start')
+                    if interval_time == selected_time:
+                        depnum = interval.get('depnum') or interval.get('depNum')
+                        found_interval = interval
+                        break
+            if not depnum:
+                depnum = selected_department_id
+            if found_interval and not found_interval.get('isFree', True):
+                await event.message.answer(
+                    '❌ Выбранное время уже занято. Пожалуйста, выберите другое время.'
+                )
+                await create_keyboard(event, context)
+                return
+            end_time = add_30_minutes(selected_time)
+            reserve_data = {
+                "date": selected_work_date,
+                "dcode": int(selected_doctor_dcode),
+                "depnum": int(depnum) if depnum else 0,
+                "en": end_time,
+                "filial": int(selected_branch_id) if selected_branch_id else 0,
+                "st": selected_time,
+                "timezone": 3,
+                "schedident": int(selected_schedident),
+                "services": [],
+                "onlineType": 0,
+                "refid": None,
+                "schedid": None,
+                "deviceDetect": 2,
+            }
+            reserve_payload = InfoClinicaReservationReservePayload(**reserve_data)
+            reserve_result = await reservation_client.reserve(reserve_payload)
+            branches = data.get('branches_list', [])
+            departments = data.get('departments_list', [])
+            doctors = data.get('doctors_list', [])
+            branch_name = "Филиал"
+            for branch in branches:
+                if str(branch.get("id")) == str(selected_branch_id):
+                    branch_name = branch.get("name", "Филиал")
+                    break
+            department_name = "Отделение"
+            for department in departments:
+                if str(department.get("id")) == str(selected_department_id):
+                    department_name = department.get("name", "Отделение")
+                    break
+            doctor_name = "Врач"
+            for doctor in doctors:
+                if str(doctor.get("dcode")) == str(selected_doctor_dcode):
+                    doctor_name = doctor.get("name", "Врач")
+                    break
+            try:
+                date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
+                date_display = date_obj.strftime("%d.%m.%Y")
+            except (ValueError, TypeError):
+                date_display = selected_work_date
+            if reserve_result.status_code == 200 and reserve_result.json:
+                reservation_message = (
+                    f'✅ Запись на приём успешно создана!\n\n'
+                    f'📍 Филиал: {branch_name}\n'
+                    f'🏥 Отделение: {department_name}\n'
+                    f'👨‍⚕️ Врач: {doctor_name}\n'
+                    f'📅 Дата: {date_display}\n'
+                    f'🕐 Время: {selected_time}'
+                )
+            else:
+                error_msg = (
+                    reserve_result.json.get('error')
+                    if reserve_result.json
+                    else reserve_result.text
+                )
+                reservation_message = f'❌ Ошибка при создании записи: {error_msg or "Неизвестная ошибка"}'
+        await event.message.answer(reservation_message)
+    except Exception as e:
+        logging.error(f"Ошибка при подтверждении записи: {e}", exc_info=True)
+        await event.message.answer(
+            f'⚠️ Произошла ошибка при создании записи: {str(e)}\n\n'
+            'Попробуйте позже или обратитесь в поддержку.'
+        )
+    await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'back_to_doctors')
