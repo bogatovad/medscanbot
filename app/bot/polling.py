@@ -1065,8 +1065,96 @@ async def handle_back_to_main(event: MessageCallback, context: MemoryContext):
 
 @dp.message_callback(F.callback.payload == 'btn_current_appointment')
 async def handle_current_appointment_button(event: MessageCallback, context: MemoryContext):
+    """Показать список текущих записей на приём (от сегодня на год вперёд). Требуется регистрация и авторизация в МИС."""
     await event.message.delete()
-    await event.message.answer('Функция "Текущая запись" в разработке')
+    id_max = context.user_id
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+    if not user:
+        await event.message.answer(
+            'Для просмотра записей необходима регистрация в системе. Пожалуйста, зарегистрируйтесь.'
+        )
+        await create_keyboard(event, context)
+        return
+    try:
+        cookies_dict = {}
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=settings.INFOCLINICA_COOKIES,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+        ) as client:
+            result = await client.authorize_user(user.cllogin, user.clpassword)
+            if result.get('success') and client._client_json.cookies:
+                cookies_dict = dict(client._client_json.cookies)
+        if not result.get('success'):
+            error_msg = result.get('error', 'Ошибка авторизации в МИС')
+            await event.message.answer(
+                f'❌ Не удалось войти в систему записей: {error_msg}\n\n'
+                'Проверьте логин и пароль в личном кабинете.'
+            )
+            await create_keyboard(event, context)
+            return
+        if not cookies_dict:
+            await event.message.answer(
+                '❌ Ошибка: сессия авторизации не получена. Попробуйте позже.'
+            )
+            await create_keyboard(event, context)
+            return
+        today = date.today()
+        st = today.strftime('%Y%m%d')
+        en = (today + timedelta(days=365)).strftime('%Y%m%d')
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=cookies_dict,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+        ) as records_client:
+            list_result = await records_client.get_records_list(st=st, en=en, start=0, length=100)
+        if list_result.status_code != 200 or not list_result.json:
+            await event.message.answer(
+                '⚠️ Не удалось загрузить список записей. Попробуйте позже.'
+            )
+            await create_keyboard(event, context)
+            return
+        data = list_result.json.get('data') or []
+        if not data:
+            await event.message.answer(
+                '📅 У вас нет записей на приём с сегодняшней даты на ближайший год.'
+            )
+            await create_keyboard(event, context)
+            return
+        lines = ['Ваши текущие записи на приём:\n']
+        for i, rec in enumerate(data, 1):
+            work_date = rec.get('workDate') or ''
+            try:
+                if len(work_date) == 8:
+                    dt = datetime.strptime(work_date, '%Y%m%d').date()
+                    work_date = dt.strftime('%d.%m.%Y')
+            except (ValueError, TypeError):
+                pass
+            filial_name = rec.get('filialName') or '—'
+            filial_address = rec.get('filialAddress') or '—'
+            filial_phone = rec.get('filialPhone') or '—'
+            dep_name = rec.get('depName') or '—'
+            doc_name = rec.get('docName') or '—'
+            start_time = rec.get('startTime') or '—'
+            block = (
+                f'📅 Дата: {work_date} · Время: {start_time}\n'
+                f'📍 Филиал: {filial_name}\n'
+                f'🏠 Адрес: {filial_address}\n'
+                f'📱 Телефон: {filial_phone}\n'
+                f'🏥 Отделение: {dep_name}\n'
+                f'👨‍⚕️ Врач: {doc_name}\n'
+            )
+            lines.append(block)
+        text = '\n'.join(lines)
+        await event.message.answer(text)
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке записей: {e}", exc_info=True)
+        await event.message.answer(
+            f'⚠️ Произошла ошибка при загрузке записей: {str(e)}\n\nПопробуйте позже.'
+        )
     await create_keyboard(event, context)
 
 
