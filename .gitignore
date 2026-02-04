@@ -208,3 +208,5 @@ __marimo__/
 
 .idea/
 /media/
+/dev_cert.pem
+/dev_key.pem
