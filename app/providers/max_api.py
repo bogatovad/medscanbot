@@ -1,4 +1,6 @@
 import logging
+import os
+
 import httpx
 
 from typing import Any
@@ -90,7 +92,7 @@ class MaxApiClient:
 
         }
 
-        resp = await self._client_json.post(url="/gov/pep/v1/sign/send", json=form_data)
+        resp = await self._client_json.post(url="/v1/sign/send", json=form_data)
 
         if raise_for_status:
             resp.raise_for_status()
@@ -104,7 +106,7 @@ class MaxApiClient:
 
     def sync_check_status(self, transaction_id: str, raise_for_status: bool = False):
 
-        resp = self.sync_client_json.get(url=f"/gov/pep/v1/sign/status/{transaction_id}")
+        resp = self.sync_client_json.get(url=f"/v1/sign/status/{transaction_id}")
 
         if raise_for_status:
             resp.raise_for_status()
@@ -129,7 +131,7 @@ class MaxApiClient:
         }
 
         resp = self.sync_client_json.post(
-            url=f"/gov/pep/v1/sign/download/{transaction_id}/{field_id}",
+            url=f"/v1/sign/download/{transaction_id}/{field_id}",
             json=json_data,
         )
 
@@ -143,30 +145,49 @@ class MaxApiClient:
             "status_code": resp.status_code,
         }
 
-    #
-    # async def upload_document(self, transaction_id: str, raise_for_status: bool = False):
-    #
-    #     resp = await self._client_json.post(f"/deals/{transaction_id}/upload")
-    #
-    #     if raise_for_status:
-    #         resp.raise_for_status()
-    #
-    #     try:
-    #         parsed_json = resp.json()
-    #     except Exception:
-    #         parsed_json = None
-    #
-    #     return parsed_json
-    #
-    # async def complete_sing(self, transaction_id: str, raise_for_status: bool = False):
-    #     resp = await self._client_json.post(f"/deals/{transaction_id}/steps")
-    #
-    #     if raise_for_status:
-    #         resp.raise_for_status()
-    #
-    #     try:
-    #         parsed_json = resp.json()
-    #     except Exception:
-    #         parsed_json = None
-    #
-    #     return parsed_json
+    def upload_document(self, transaction_id: str, file_path: str, raise_for_status: bool = False):
+
+        with open(file_path, "rb") as f:
+            files = {
+                "file": (
+                    os.path.basename(file_path),
+                    f,
+                    "application/octet-stream",
+                )
+            }
+
+            data = {"mimeType": "application/octet-stream" }
+
+            resp = httpx.post(
+                url=f"{self.base_url}/v1/sign/upload/{transaction_id}",
+                files=files,
+                data=data,
+                headers={"Authorization": self.token},  # без Content-Type!
+            )
+
+        if raise_for_status:
+            resp.raise_for_status()
+
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+
+        return parsed_json
+
+    def complete_sing(self, transaction_id: str, phone_number: str, raise_for_status: bool = False):
+        json_data = {
+            "phoneNumber": phone_number,
+            "templateId": "1e876cb0-4200-452b-aa39-8bebc196f6e9"
+        }
+        resp = self.sync_client_json.post(f"/v1/sign/complete/{transaction_id}", json=json_data)
+
+        if raise_for_status:
+            resp.raise_for_status()
+
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+
+        return parsed_json

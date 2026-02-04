@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     EXT_API_TOKEN: str = ""
     EXT_API_TIMEOUT_SECONDS: float = 30.0
 
-    MAX_API_URL: str = "https://platform-api.max.ru"
+    MAX_API_URL: str = "https://platform-api.max.ru/gov/pep"
     MAX_API_AUTH_TOKEN: str = ""
     MAX_API_TIMEOUT_SECONDS: float = 30.0
 
@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     CELERY_BROKER: str = REDIS_URL
 
     MEDIA_ROOT: str = "media"
+
+    OPENSSL_CERT_PATH: str = "/opt/services/app/src/dev_cert.pem"
+    OPENSSL_KEY_PATH: str = "/opt/services/app/src/dev_key.pem"
 
     model_config = SettingsConfigDict(env_file=".env")
 
