@@ -1,5 +1,19 @@
 services:
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: med_scan_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-med_scan}
+    volumes:
+      - db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - database_network
+
   backend:
     build: .
     container_name: med_scan_backend
@@ -12,6 +26,8 @@ services:
       - 8000
     ports:
       - "8000:8000"
+    depends_on:
+       - postgres
     networks:
       - redis_network
       - database_network
@@ -23,6 +39,8 @@ services:
       - .:/opt:Z
     env_file:
       - .env
+    depends_on:
+      - postgres
     networks:
       - redis_network
       - database_network
@@ -49,6 +67,7 @@ services:
       - C_FORCE_ROOT=true
     depends_on:
       - redis
+      - postgres
     env_file:
       - .env
     networks:
@@ -67,6 +86,7 @@ services:
       - C_FORCE_ROOT=true
     depends_on:
       - redis
+      - postgres
     env_file:
       - .env
     networks:

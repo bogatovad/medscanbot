@@ -1,12 +1,33 @@
+from urllib.parse import quote_plus
+
+from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    DB_URL: str = "postgresql+asyncpg://user:password@postgres:5432/med_scan"
+    # Хост БД: в Docker — "postgres", при локальном запуске бота — "127.0.0.1"
+    DB_HOST: str = "postgres"
+    POSTGRES_USER: str = "user"
+    POSTGRES_PASSWORD: str = "password"
+    POSTGRES_DB: str = "med_scan"
+    POSTGRES_PORT: int = 5432
+
+    @computed_field
+    @property
+    def DB_URL(self) -> str:
+        u = quote_plus(self.POSTGRES_USER)
+        p = quote_plus(self.POSTGRES_PASSWORD)
+        return f"postgresql+asyncpg://{u}:{p}@{self.DB_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     INFOCLINICA_BASE_URL: str = "https://medscan-t.infoclinica.ru"
     INFOCLINICA_TIMEOUT_SECONDS: float = 30.0
     INFOCLINICA_COOKIES: str = ""
+    # API создания/обновления пациентов (МИС): хост, логин/пароль для JWT
+    INFOCLINICA_PATIENTS_API_URL: str = "https://10.1.10.186"
+    INFOCLINICA_PATIENTS_API_LOGIN: str = "admin"
+    INFOCLINICA_PATIENTS_API_PASSWORD: str = "secret"
+    # Таймаут для запросов к API пациентов (сек)
+    INFOCLINICA_PATIENTS_API_TIMEOUT_SECONDS: float = 60.0
 
     MAX_BOT_TOKEN: str = ""
 
