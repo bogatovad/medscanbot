@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     EXT_API_TOKEN: str = ""
     EXT_API_TIMEOUT_SECONDS: float = 30.0
 
-    MAX_API_URL: str = "https://platform-api.max.ru/gov/pep"
-    MAX_API_AUTH_TOKEN: str = ""
+    MAX_API_URL: str = "https://platform-api.max.ru"
+    MAX_API_AUTH_TOKEN: str = "f9LHodD0cOJd3iZGzkNK8o0c3mbmFFnzup5XEj3qN49yET-uUds5BL-6wvxkp5gd1ofpLoOogJKrDftBXA5q"
     MAX_API_TIMEOUT_SECONDS: float = 30.0
 
     REDIS_URL: str = "redis://:@redis:6379/0"
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     OPENSSL_CERT_PATH: str = "/opt/services/app/src/dev_cert.pem"
     OPENSSL_KEY_PATH: str = "/opt/services/app/src/dev_key.pem"
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()

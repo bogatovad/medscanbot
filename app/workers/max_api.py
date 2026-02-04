@@ -131,12 +131,16 @@ def save_sig(*, content: bytes | str, transaction_id: str) -> str:
 
 
 @app.task(bind=True, max_retries=30, name="app.workers.max_api.poll_max_api_status")
-def poll_max_api_status(self, transaction_id: str, chat_id: int, phone_number: str):
+def poll_max_api_status(self, phone_number: str, user_id: int, transaction_id: str):
     client = MaxApiClient()
     try:
+
         data = client.sync_check_status(transaction_id=transaction_id)
+
         tx_status = data.get("status")
+
         if tx_status in {"cancelled", "error"}:
+            client.send_message(user_id, "Не удалось подписать документ, попробуйте позднее")
             return None
 
         steps = data.get("steps", [])
@@ -183,7 +187,8 @@ def poll_max_api_status(self, transaction_id: str, chat_id: int, phone_number: s
                     )
                     upload_res = client.upload_document(file_path=output_path, transaction_id=transaction_id)
 
-                    print(upload_res)
+                    if "fileId" in upload_res:
+                        client.send_message(user_id, "Документ успешно подписан")
 
                 return True
 

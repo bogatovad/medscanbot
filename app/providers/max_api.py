@@ -92,7 +92,7 @@ class MaxApiClient:
 
         }
 
-        resp = await self._client_json.post(url="/v1/sign/send", json=form_data)
+        resp = await self._client_json.post(url="/gov/pep/v1/sign/send", json=form_data)
 
         if raise_for_status:
             resp.raise_for_status()
@@ -106,7 +106,7 @@ class MaxApiClient:
 
     def sync_check_status(self, transaction_id: str, raise_for_status: bool = False):
 
-        resp = self.sync_client_json.get(url=f"/v1/sign/status/{transaction_id}")
+        resp = self.sync_client_json.get(url=f"/gov/pep/v1/sign/status/{transaction_id}")
 
         if raise_for_status:
             resp.raise_for_status()
@@ -131,7 +131,7 @@ class MaxApiClient:
         }
 
         resp = self.sync_client_json.post(
-            url=f"/v1/sign/download/{transaction_id}/{field_id}",
+            url=f"/gov/pep/v1/sign/download/{transaction_id}/{field_id}",
             json=json_data,
         )
 
@@ -159,7 +159,7 @@ class MaxApiClient:
             data = {"mimeType": "application/octet-stream" }
 
             resp = httpx.post(
-                url=f"{self.base_url}/v1/sign/upload/{transaction_id}",
+                url=f"{self.base_url}/gov/pep/v1/sign/upload/{transaction_id}",
                 files=files,
                 data=data,
                 headers={"Authorization": self.token},  # без Content-Type!
@@ -180,7 +180,27 @@ class MaxApiClient:
             "phoneNumber": phone_number,
             "templateId": "1e876cb0-4200-452b-aa39-8bebc196f6e9"
         }
-        resp = self.sync_client_json.post(f"/v1/sign/complete/{transaction_id}", json=json_data)
+        resp = self.sync_client_json.post(f"/gov/pep/v1/sign/complete/{transaction_id}", json=json_data)
+
+        if raise_for_status:
+            resp.raise_for_status()
+
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+
+        return parsed_json
+
+    def send_message(self, user_id: int, text: str, raise_for_status: bool = False):
+        json_data = {
+            "text": text
+        }
+        resp = self.sync_client_json.post(
+            url=f"/messages?user_id={user_id}",
+            json=json_data,
+            headers={"Authorization": settings.MAX_BOT_TOKEN}
+        )
 
         if raise_for_status:
             resp.raise_for_status()

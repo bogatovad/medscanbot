@@ -9,6 +9,7 @@ import httpx
 
 from maxapi import F
 from maxapi.context import MemoryContext, State, StatesGroup
+from maxapi.enums.attachment import AttachmentType
 from maxapi.types import (
     BotStarted,
     Command,
@@ -17,10 +18,15 @@ from maxapi.types import (
     MessageCallback,
     BotCommand,
     InputMedia,
-    LinkButton,
+    Attachment,
+    ButtonsPayload,
+    RequestContactButton,
+    Message,
 )
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
+from app.providers.max_api import MaxApiClient
+from app.workers.max_api import poll_max_api_status
 from app.providers.infoclinica_client import InfoClinicaClient
 from app.config import settings
 from app.bot import bot, dp
@@ -168,12 +174,12 @@ def _build_main_keyboard_buttons(is_registered: bool):
                 payload='btn_lk_registration'
             )
         )
-    builder.row(
-        CallbackButton(
-            text='✍️ Подписать',
-            payload='btn_sign_documents'
-        )
-    )
+    # builder.row(
+    #     CallbackButton(
+    #         text='✍️ Подписать документы онлайн',
+    #         payload='btn_sign_documents'
+    #     )
+    # )
     builder.row(
         CallbackButton(
             text='ℹ️ Информация о Медскан',
@@ -1012,6 +1018,12 @@ async def handle_back_to_auth_choice(event: MessageCallback, context: MemoryCont
         )
         builder.row(
             CallbackButton(
+                text='✍️ Подписать документы онлайн',
+                payload='btn_sign_documents'
+            )
+        )
+        builder.row(
+            CallbackButton(
                 text='🔙 Назад к выбору даты',
                 payload='back_to_schedule'
             )
@@ -1158,31 +1170,55 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
     await create_keyboard(event, context)
 
 
+@dp.message_created(
+    lambda e: any(a.type == AttachmentType.CONTACT for a in (e.message.attachments or []))
+)
+async def handle_contact(event: Message, context: MemoryContext):
+    contact = next(a for a in event.message.body.attachments if a.type == AttachmentType.CONTACT)
+
+    vcf = contact.payload.vcf_info
+    phone_number = vcf.split("TEL;TYPE=cell:")[1].split("\r\n")[0] if "TEL;TYPE=cell:" in vcf else "не найден"
+
+    client = MaxApiClient()
+
+    res = await client.send_pep_sing(phone_number=phone_number)
+
+    transaction_id = res.get("transactionId")
+
+    poll_max_api_status.delay(f"+{phone_number}", context.user_id, transaction_id)
+
+    await event.message.delete()
+    await event.message.answer(
+        f"✅ Номер получен: {phone_number}",
+    )
+
+
 @dp.message_callback(F.callback.payload == 'btn_sign_documents')
 async def handle_sign_documents_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
 
     text = (
-        'Чтобы подписать документы:\n'
-        '1. Вам напишет бот «Госключ» @goskey_bot\n'
-        '2. Перейдите в него и нажмите «Подписать на госуслугах»\n'
-        '3. Подпишите документы на Госуслугах\n'
-        '4. После этого мы загрузим подписанные документы\n\n'
+        "📱 Для подписания документа необходимо предоставить номер телефона.\n\n"
+        "Нажмите кнопку ниже, чтобы поделиться номером."
     )
 
+    attachments = [
+        Attachment(
+            type=AttachmentType.INLINE_KEYBOARD,
+            payload=ButtonsPayload(
+                buttons=[
+                    [
+                        RequestContactButton(
+                            text="📲 Поделиться номером",
+                        )
+                    ]
+                ]
+            )
+        )
+    ]
+
     builder = InlineKeyboardBuilder()
-    builder.row(
-        LinkButton(
-            text='Перейти в Госключ',
-            url='https://max.ru/goskey_bot'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='✅ Я подписал',
-            payload='btn_goskey_signed'
-        )
-    )
+
     builder.row(
         CallbackButton(
             text='🔙 Назад',
@@ -1192,7 +1228,7 @@ async def handle_sign_documents_button(event: MessageCallback, context: MemoryCo
 
     await event.message.answer(
         text=text,
-        attachments=[builder.as_markup()]
+        attachments=attachments,
     )
 
 
