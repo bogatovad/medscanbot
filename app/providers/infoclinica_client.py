@@ -763,6 +763,52 @@ class InfoClinicaClient:
             json=parsed_json,
         )
 
+    async def get_records_list(
+        self,
+        *,
+        st: str,
+        en: str,
+        start: int = 0,
+        length: int = 25,
+        cache_buster: int | None = None,
+        raise_for_status: bool = False,
+    ) -> InfoClinicaHttpResult:
+        """
+        GET /records/list — список записей пользователя (требует авторизации).
+
+        Параметры:
+        - st: YYYYMMDD — начало периода
+        - en: YYYYMMDD — конец периода
+        - start: смещение (по умолчанию 0)
+        - length: количество записей (по умолчанию 25)
+        """
+        if cache_buster is None:
+            cache_buster = int(time.time() * 1000)
+        params = {
+            "st": st,
+            "en": en,
+            "start": start,
+            "length": length,
+            "_": cache_buster,
+        }
+        resp = await self._client_json.get("/records/list", params=params)
+        if raise_for_status:
+            resp.raise_for_status()
+        parsed_json: Any | None = None
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+        logger.debug(
+            "InfoClinica /records/list status=%s",
+            resp.status_code,
+        )
+        return InfoClinicaHttpResult(
+            status_code=resp.status_code,
+            text=resp.text,
+            json=parsed_json,
+        )
+
     async def record_confirm(
         self,
         *,
