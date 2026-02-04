@@ -9,6 +9,7 @@ from httpx import AsyncClient
 
 from app.config import settings
 from app.schemas.infoclinica import (
+    CreatePatientPayload,
     InfoClinicaHttpResult,
     InfoClinicaConfirmRegistrationPayload,
     InfoClinicaChangeTempPasswordPayload,
@@ -18,9 +19,38 @@ from app.schemas.infoclinica import (
     InfoClinicaRegistrationPayload,
     InfoClinicaReservationReservePayload,
     InfoClinicaReservationSchedulePayload,
+    UpdatePatientCredentialsPayload,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _fetch_patients_api_token() -> str:
+    """
+    POST /token (application/x-www-form-urlencoded) для получения JWT.
+    Использует INFOCLINICA_PATIENTS_API_* из настроек.
+    """
+    base_url = (settings.INFOCLINICA_PATIENTS_API_URL or "").rstrip("/")
+    url = f"{base_url}/token"
+    timeout = float(settings.INFOCLINICA_PATIENTS_API_TIMEOUT_SECONDS)
+    login = settings.INFOCLINICA_PATIENTS_API_LOGIN
+    password = settings.INFOCLINICA_PATIENTS_API_PASSWORD
+    data = {
+        "grant_type": "",
+        "username": login,
+        "password": password,
+        "scope": "",
+        "client_id": "",
+        "client_secret": "",
+    }
+    async with AsyncClient(timeout=timeout, verify=False) as client:
+        resp = await client.post(url, data=data)
+    resp.raise_for_status()
+    parsed = resp.json() or {}
+    token = parsed.get("access_token") or ""
+    if not token:
+        raise ValueError("В ответе /token нет access_token")
+    return token
 
 
 class InfoClinicaClient:
@@ -1032,6 +1062,85 @@ class InfoClinicaClient:
                 jsonlib.dumps(parsed_json, ensure_ascii=False)[:2000],
             )
 
+        return InfoClinicaHttpResult(
+            status_code=resp.status_code,
+            text=resp.text,
+            json=parsed_json,
+        )
+
+    async def create_patient(
+        self,
+        payload: CreatePatientPayload,
+        *,
+        raise_for_status: bool = False,
+    ) -> InfoClinicaHttpResult:
+        """
+        POST /createPatients/ — регистрация пациента в МИС.
+        Сначала получает JWT через POST /token, затем запрос с заголовком Authorization.
+        В ответе ожидается pcode (идентификатор пациента в ИК).
+        """
+        token = await _fetch_patients_api_token()
+        base_url = settings.INFOCLINICA_PATIENTS_API_URL.rstrip("/")
+        url = f"{base_url}/createPatients/"
+        body = payload.to_json()
+        timeout_patients = float(settings.INFOCLINICA_PATIENTS_API_TIMEOUT_SECONDS)
+        headers = {"Authorization": f"Bearer {token}"}
+        async with AsyncClient(
+            timeout=timeout_patients,
+            verify=False,
+        ) as client:
+            resp = await client.post(url, json=body, headers=headers)
+        if raise_for_status:
+            resp.raise_for_status()
+        parsed_json: Any | None = None
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+        logger.debug(
+            "InfoClinica POST /createPatients/ status=%s body=%s",
+            resp.status_code,
+            (resp.text[:2000] + "…") if len(resp.text) > 2000 else resp.text,
+        )
+        return InfoClinicaHttpResult(
+            status_code=resp.status_code,
+            text=resp.text,
+            json=parsed_json,
+        )
+
+    async def update_patient_credentials(
+        self,
+        pcode: str,
+        payload: UpdatePatientCredentialsPayload,
+        *,
+        raise_for_status: bool = False,
+    ) -> InfoClinicaHttpResult:
+        """
+        PUT /updatePatients/{pcode}/credentials — обновление логина и пароля пациента в МИС.
+        """
+        token = await _fetch_patients_api_token()
+        base_url = (settings.INFOCLINICA_PATIENTS_API_URL or settings.INFOCLINICA_BASE_URL).rstrip("/")
+        url = f"{base_url}/updatePatients/{pcode}/credentials"
+        body = payload.to_json()
+        timeout_patients = float(settings.INFOCLINICA_PATIENTS_API_TIMEOUT_SECONDS)
+        headers = {"Authorization": f"Bearer {token}"}
+        async with AsyncClient(
+            timeout=timeout_patients,
+            verify=False,
+        ) as client:
+            resp = await client.put(url, json=body, headers=headers)
+        if raise_for_status:
+            resp.raise_for_status()
+        parsed_json: Any | None = None
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+        logger.debug(
+            "InfoClinica PUT /updatePatients/.../credentials status=%s body=%s",
+            resp.status_code,
+            (resp.text[:2000] + "…") if len(resp.text) > 2000 else resp.text,
+        )
         return InfoClinicaHttpResult(
             status_code=resp.status_code,
             text=resp.text,

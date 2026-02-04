@@ -24,6 +24,9 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from app.providers.infoclinica_client import InfoClinicaClient
 from app.config import settings
 from app.bot import bot, dp
+from app.db.base import DatabaseSessionManager
+from app.crud.registered_user import RegisteredUserRepository
+from app.schemas.infoclinica import CreatePatientPayload, UpdatePatientCredentialsPayload
 from app.schemas.infoclinica import (
     InfoClinicaRegistrationPayload,
     InfoClinicaReservationReservePayload,
@@ -95,6 +98,16 @@ class LoginForm(StatesGroup):
     password = State()
 
 
+class LkRegistrationForm(StatesGroup):
+    """Форма регистрации в ЛК: ввод всех данных одним сообщением (6 строк)"""
+    data = State()
+
+
+class LkChangeCredentialsForm(StatesGroup):
+    """Форма смены логина и пароля: две строки — email, пароль (в МИС меняются только они)."""
+    data = State()
+
+
 @dp.on_started()
 async def on_bot_started():
     logging.info('Бот стартовал!')
@@ -106,7 +119,6 @@ async def handle_bot_started(event: BotStarted):
         chat_id=event.chat_id,
         text='Привет! Отправь мне /start'
     )
-
 
 @dp.message_created(Command('clear'))
 async def handle_clear_command(event: MessageCreated, context: MemoryContext):
@@ -127,35 +139,60 @@ async def handle_state_command(event: MessageCreated, context: MemoryContext):
     await event.message.answer(f"Ваше контекстное состояние: {str(data)}")
 
 
+def _build_main_keyboard_buttons(is_registered: bool):
+    """Собирает ряды кнопок главного меню. Регистрация или Личный кабинет в зависимости от is_registered."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(
+            text='📅 Текущая запись',
+            payload='btn_current_appointment'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='➕ Записаться на прием',
+            payload='btn_make_appointment'
+        )
+    )
+    if is_registered:
+        builder.row(
+            CallbackButton(
+                text='👤 Личный кабинет',
+                payload='btn_personal_cabinet'
+            )
+        )
+    else:
+        builder.row(
+            CallbackButton(
+                text='📝 Регистрация',
+                payload='btn_lk_registration'
+            )
+        )
+    builder.row(
+        CallbackButton(
+            text='✍️ Подписать',
+            payload='btn_sign_documents'
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text='ℹ️ Информация о Медскан',
+            payload='btn_info'
+        )
+    )
+    return builder
+
+
 @dp.message_created(Command('start'))
-async def handle_start_command(event: MessageCreated):
-    builder = InlineKeyboardBuilder()
-
-    builder.row(
-        CallbackButton(
-            text='📅 Текущая запись',
-            payload='btn_current_appointment'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='➕ Записаться на прием',
-            payload='btn_make_appointment'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='✍️ Подписать',
-            payload='btn_sign_documents'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='ℹ️ Информация о Медскан',
-            payload='btn_info'
-        )
-    )
-
+async def handle_start_command(event: MessageCreated, context: MemoryContext):
+    id_max = context.user_id
+    is_registered = False
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+        is_registered = user is not None
+    builder = _build_main_keyboard_buttons(is_registered)
     await event.message.answer(
         text=start_text,
         attachments=[
@@ -164,40 +201,279 @@ async def handle_start_command(event: MessageCreated):
     )
 
 
-async def create_keyboard(event):
-    builder = InlineKeyboardBuilder()
-
-    builder.row(
-        CallbackButton(
-            text='📅 Текущая запись',
-            payload='btn_current_appointment'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='➕ Записаться на прием',
-            payload='btn_make_appointment'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='✍️ Подписать',
-            payload='btn_sign_documents'
-        )
-    )
-    builder.row(
-        CallbackButton(
-            text='ℹ️ Информация о Медскан',
-            payload='btn_info'
-        )
-    )
-
+async def create_keyboard(event, context):
+    id_max = context.user_id
+    is_registered = False
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+        is_registered = user is not None
+    builder = _build_main_keyboard_buttons(is_registered)
     await event.message.answer(
         text=start_text,
         attachments=[
             builder.as_markup(),
         ]
     )
+
+
+# --- Регистрация в ЛК (одним сообщением) ---
+
+REGISTRATION_INSTRUCTIONS = """📝 Регистрация в личный кабинет
+
+Введите данные **одним сообщением**, каждое значение с новой строки (всего 6 строк):
+
+1️⃣ Фамилия
+2️⃣ Имя  
+3️⃣ Отчество
+4️⃣ Дата рождения (формат ГГГГ-ММ-ДД, например 1990-01-15)
+5️⃣ Email (логин в ЛК)
+6️⃣ Пароль
+
+Пример:
+Иванов
+Иван
+Иванович
+1990-01-15
+ivanov@example.com
+мой_пароль123"""
+
+
+def parse_lk_registration_text(text: str) -> dict | None:
+    """
+    Парсит сообщение из 6 строк в словарь для API.
+    Возвращает None при ошибке формата или даты.
+    """
+    lines = [line.strip() for line in (text or "").strip().split("\n") if line.strip()]
+    if len(lines) < 6:
+        return None
+    lastname, firstname, midname, bdate_str, cllogin, clpassword = lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
+    # Проверка даты ГГГГ-ММ-ДД
+    try:
+        datetime.strptime(bdate_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return {
+        "lastname": lastname,
+        "firstname": firstname,
+        "midname": midname,
+        "bdate": bdate_str,
+        "cllogin": cllogin,
+        "clpassword": clpassword,
+    }
+
+
+@dp.message_callback(F.callback.payload == 'btn_personal_cabinet')
+async def handle_personal_cabinet(event: MessageCallback, context: MemoryContext):
+    """Кнопка «Личный кабинет» — показываем данные из БД и дату регистрации."""
+    await event.message.delete()
+    id_max = context.user_id
+    logging.info(f"DSKLFGJNSDLKJFNSDKLJN!! {id_max=}")
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+    if not user:
+        await event.message.answer("Пользователь не найден. Нажмите /start.")
+        await create_keyboard(event, context)
+        return
+    reg_date = user.registered_at
+    if reg_date and hasattr(reg_date, "strftime"):
+        reg_str = reg_date.strftime("%d.%m.%Y %H:%M")
+    else:
+        reg_str = str(reg_date)
+    text = (
+        "👤 Личный кабинет\n\n"
+        f"Фамилия: {user.lastname}\n"
+        f"Имя: {user.firstname}\n"
+        f"Отчество: {user.midname or '—'}\n"
+        f"Дата рождения: {user.bdate}\n"
+        f"Логин (email): {user.cllogin}\n"
+        f"Пароль: {user.clpassword}\n"
+        f"Код пациента (ИК): {user.pcode}\n\n"
+        f"📅 Дата регистрации в системе: {reg_str}"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(text='🔙 Назад', payload='back_to_main')
+    )
+    builder.row(
+        CallbackButton(text='🔐 Поменять логин и пароль', payload='btn_change_credentials')
+    )
+    builder.row(
+        CallbackButton(text='🗑 Удалить аккаунт', payload='btn_delete_account')
+    )
+    await event.message.answer(text=text, attachments=[builder.as_markup()])
+
+
+@dp.message_callback(F.callback.payload == 'btn_change_credentials')
+async def handle_change_credentials_button(event: MessageCallback, context: MemoryContext):
+    """Кнопка «Поменять логин и пароль» — запрашиваем email и пароль (2 строки), обновляем БД и МИС."""
+    await event.message.delete()
+    await context.set_state(LkChangeCredentialsForm.data)
+    await event.message.answer(
+        "🔐 Смена логина и пароля.\n\n"
+        "Отправьте двумя строками:\n"
+        "1. Новый email (логин)\n"
+        "2. Новый пароль"
+    )
+
+
+def _parse_login_password(text: str) -> tuple[str, str] | None:
+    """Парсит 2 строки: логин, пароль. Возвращает (login, password) или None."""
+    lines = [line.strip() for line in (text or "").strip().split("\n") if line.strip()]
+    if len(lines) < 2:
+        return None
+    return lines[0], lines[1]
+
+
+@dp.message_created(F.message.body.text, LkChangeCredentialsForm.data)
+async def handle_change_credentials_data(event: MessageCreated, context: MemoryContext):
+    """Введены логин и пароль — обновляем cllogin в БД и отправляем оба значения в МИС (PUT credentials)."""
+    await context.set_state(None)
+    parsed = _parse_login_password((event.message.body.text or "").strip())
+    if not parsed:
+        await event.message.answer("Нужны две строки: email и пароль. Попробуйте снова.")
+        return
+    new_login, new_password = parsed
+    if not new_login or not new_password:
+        await event.message.answer("Логин и пароль не должны быть пустыми. Попробуйте снова.")
+        return
+    id_max = context.user_id
+    try:
+        dsm = DatabaseSessionManager.create(settings.DB_URL)
+        async with dsm.get_session() as session:
+            repo = RegisteredUserRepository(session)
+            user = await repo.get_by_max_id(id_max)
+            if not user:
+                await event.message.answer("Пользователь не найден.")
+                await create_keyboard(event, context)
+                return
+            pcode = str(user.pcode)
+            await repo.update(id_max, cllogin=new_login, clpassword=new_password)
+            await session.commit()
+
+        creds = UpdatePatientCredentialsPayload(cllogin=new_login, clpassword=new_password)
+        async with InfoClinicaClient() as client:
+            result = await client.update_patient_credentials(pcode, creds)
+        if result.status_code in (200, 204):
+            await event.message.answer("✅ Логин и пароль обновлены в боте и в системе МИС.")
+        else:
+            err = (result.json or {}).get("message") if isinstance(result.json, dict) else result.text or "Ошибка МИС"
+            await event.message.answer(f"✅ Данные обновлены в боте.\n⚠️ В МИС: {err}")
+        await create_keyboard(event, context)
+    except Exception as e:
+        logging.exception("Ошибка при смене логина и пароля")
+        await event.message.answer(f"❌ Ошибка: {str(e)[:200]}")
+        await create_keyboard(event, context)
+
+
+@dp.message_callback(F.callback.payload == 'btn_delete_account')
+async def handle_delete_account(event: MessageCallback, context: MemoryContext):
+    """Удаление аккаунта из БД по кнопке «Удалить аккаунт» в личном кабинете."""
+    await event.message.delete()
+    id_max = context.user_id
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        deleted = await repo.delete_by_max_id(id_max)
+        if deleted:
+            await session.commit()
+    if deleted:
+        await event.message.answer("✅ Аккаунт удалён. Вы можете зарегистрироваться снова.")
+    else:
+        await event.message.answer("Аккаунт не найден или уже удалён.")
+    await create_keyboard(event, context)
+
+
+@dp.message_callback(F.callback.payload == 'btn_lk_registration')
+async def handle_lk_registration_button(event: MessageCallback, context: MemoryContext):
+    """Кнопка «Регистрация» — запрашиваем данные одним сообщением."""
+    await event.message.delete()
+    await context.set_state(LkRegistrationForm.data)
+    await event.message.answer(REGISTRATION_INSTRUCTIONS)
+
+
+@dp.message_created(F.message.body.text, LkRegistrationForm.data)
+async def handle_lk_registration_data(event: MessageCreated, context: MemoryContext):
+    """Обработка введённых данных регистрации ЛК: запрос в МИС (createPatients) и сохранение в БД."""
+    text = (event.message.body.text or "").strip()
+    payload = parse_lk_registration_text(text)
+
+    if payload is None:
+        await event.message.answer(
+            "❌ Неверный формат. Нужно 6 строк: Фамилия, Имя, Отчество, Дата (ГГГГ-ММ-ДД), Email, Пароль.\n\nПопробуйте ещё раз или нажмите /start для отмены."
+        )
+        return
+
+    await context.set_state(None)
+
+    id_max = context.user_id
+
+    try:
+        create_payload = CreatePatientPayload(
+            lastname=payload["lastname"],
+            firstname=payload["firstname"],
+            midname=payload["midname"],
+            bdate=payload["bdate"],
+            cllogin=payload["cllogin"],
+            clpassword=payload["clpassword"],
+        )
+        async with InfoClinicaClient() as client:
+            result = await client.create_patient(create_payload)
+
+        if result.status_code not in (200, 201):
+            err = (result.json or {}).get("message") if isinstance(result.json, dict) else result.text or "Ошибка регистрации в МИС"
+            await event.message.answer(f"❌ Регистрация в системе не удалась: {err}")
+            return
+
+        pcode = None
+        if result.json:
+            if isinstance(result.json, dict):
+                pcode = result.json.get("pcode")
+            elif isinstance(result.json, str):
+                pcode = result.json
+        if not pcode:
+            await event.message.answer("❌ В ответе системы не найден идентификатор пациента (pcode).")
+            return
+
+        dsm = DatabaseSessionManager.create(settings.DB_URL)
+        async with dsm.get_session() as session:
+            repo = RegisteredUserRepository(session)
+            await repo.save(
+                id_max=id_max,
+                pcode=str(pcode),
+                lastname=payload["lastname"],
+                firstname=payload["firstname"],
+                midname=payload["midname"] or None,
+                bdate=payload["bdate"],
+                cllogin=payload["cllogin"],
+                clpassword=payload["clpassword"],
+            )
+            await session.commit()
+
+        await event.message.answer(
+            "✅ Регистрация в личном кабинете завершена. Данные сохранены в системе."
+        )
+        await create_keyboard(event, context)
+    except httpx.ConnectTimeout:
+        logging.warning("Таймаут соединения с API регистрации пациентов (МИС)")
+        await event.message.answer(
+            "❌ Сервис регистрации временно недоступен (таймаут соединения).\n\n"
+            "Сервер МИС не ответил вовремя. Проверьте доступность сервера или попробуйте позже."
+        )
+    except httpx.ConnectError as e:
+        logging.warning("Ошибка соединения с API регистрации пациентов: %s", e)
+        await event.message.answer(
+            "❌ Не удалось подключиться к сервису регистрации (сервер МИС недоступен).\n\n"
+            "Попробуйте позже или обратитесь в поддержку."
+        )
+    except Exception as e:
+        logging.exception("Ошибка при регистрации в ЛК")
+        await event.message.answer(
+            f"❌ Произошла ошибка при регистрации. Попробуйте позже или обратитесь в поддержку.\n{str(e)[:200]}"
+        )
 
 
 @dp.message_callback(F.callback.payload == 'btn_info')
@@ -758,7 +1034,7 @@ async def handle_back_to_auth_choice(event: MessageCallback, context: MemoryCont
             attachments=[builder.as_markup()]
         )
     else:
-        await create_keyboard(event)
+        await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'back_to_login_username')
@@ -784,14 +1060,14 @@ async def handle_back_to_login_username(event: MessageCallback, context: MemoryC
 @dp.message_callback(F.callback.payload == 'back_to_main')
 async def handle_back_to_main(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
-    await create_keyboard(event)
+    await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'btn_current_appointment')
 async def handle_current_appointment_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     await event.message.answer('Функция "Текущая запись" в разработке')
-    await create_keyboard(event)
+    await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'btn_sign_documents')
@@ -839,7 +1115,7 @@ async def handle_goskey_signed(event: MessageCallback, context: MemoryContext):
     await event.message.answer(
         text='Спасибо! Мы загрузим подписанные документы и сообщим, когда они будут готовы.'
     )
-    await create_keyboard(event)
+    await create_keyboard(event, context)
 
 
 async def get_branches():
@@ -2089,7 +2365,7 @@ async def handle_login_password(event: MessageCreated, context: MemoryContext):
                 message += f'Логин: {username}'
                 
                 await event.message.answer(message)
-                await create_keyboard(event)
+                await create_keyboard(event, context)
                 
                 # Получаем cookies из авторизованного клиента
                 authorized_client = result.get('client') or client
@@ -2449,7 +2725,7 @@ async def handle_accept_personal_data(event: MessageCallback, context: MemoryCon
                     f'Пол: {"Мужской" if data.get("reg_gender") == 1 else "Женский"}\n\n'
                     f'Запись подтверждена. Ожидайте подтверждения.'
                 )
-                await create_keyboard(event)
+                await create_keyboard(event, context)
             else:
                 error_msg = result.json.get('message', 'Ошибка регистрации') if result.json else 'Ошибка регистрации'
                 await event.message.delete()
@@ -2475,7 +2751,7 @@ async def handle_reject_personal_data(event: MessageCallback, context: MemoryCon
         '❌ Регистрация отменена.\n\n'
         'Для создания записи необходимо согласие на обработку персональных данных.'
     )
-    await create_keyboard(event)
+    await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'back_to_schedule')

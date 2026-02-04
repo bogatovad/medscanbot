@@ -14,10 +14,8 @@ ENV PYTHONFAULTHANDLER=1 \
 EXPOSE 8000
 
 RUN apt-get update \
-    # Cleaning cache:  \
+  && apt-get install -y --no-install-recommends libpq5 \
   && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* \
-  # Installing `poetry` package manager:
-  # https://github.com/python-poetry/poetry
   && pip install idna "poetry==$POETRY_VERSION" && poetry --version
 
 RUN mkdir -p /opt/services/app/src

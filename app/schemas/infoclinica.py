@@ -186,6 +186,30 @@ class ReservationScheduleService(BaseModel):
         return self.model_dump(by_alias=True, exclude_none=False)
 
 
+class CreatePatientPayload(BaseModel):
+    """Payload для POST /createPatients/ (регистрация пациента в МИС)."""
+
+    lastname: str
+    firstname: str
+    midname: str
+    bdate: str  # ГГГГ-ММ-ДД
+    cllogin: str  # Логин в ЛК (почта)
+    clpassword: str
+
+    def to_json(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=False)
+
+
+class UpdatePatientCredentialsPayload(BaseModel):
+    """Payload для PUT /updatePatients/{pcode}/credentials (обновление логина/пароля)."""
+
+    cllogin: str
+    clpassword: str
+
+    def to_json(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=False)
+
+
 class InfoClinicaReservationSchedulePayload(BaseModel):
     """
     Payload for POST /api/reservation/schedule (application/json).
