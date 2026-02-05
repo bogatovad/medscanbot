@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 import subprocess
 import uuid
@@ -19,6 +20,38 @@ class OpenSSLSignError(Exception):
     pass
 
 
+def _ensure_signer_cert_and_key() -> tuple[str, str]:
+    """
+    Возвращает пути к сертификату и ключу для подписи.
+    Если файлы из настроек отсутствуют, генерирует dev-сертификат в MEDIA_ROOT.
+    """
+    cert_path = settings.OPENSSL_CERT_PATH
+    key_path = settings.OPENSSL_KEY_PATH
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        return cert_path, key_path
+    # Генерируем dev-сертификат в каталоге MEDIA_ROOT (обычно доступен на запись)
+    media_root = os.path.abspath(settings.MEDIA_ROOT)
+    os.makedirs(media_root, exist_ok=True)
+    fallback_cert = os.path.join(media_root, "dev_cert.pem")
+    fallback_key = os.path.join(media_root, "dev_key.pem")
+    if os.path.exists(fallback_cert) and os.path.exists(fallback_key):
+        return fallback_cert, fallback_key
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", fallback_key,
+            "-out", fallback_cert,
+            "-days", "365",
+            "-nodes",
+            "-subj", "/CN=medscan-dev",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    return fallback_cert, fallback_key
+
+
 def create_signature_with_openssl(
     zip_path: str,
     transaction_id: str,
@@ -31,9 +64,10 @@ def create_signature_with_openssl(
 
     Возвращает путь к созданному .sig файлу
     """
-
     if not os.path.exists(zip_path):
         raise FileNotFoundError(f"ZIP not found: {zip_path}")
+
+    cert_path, key_path = _ensure_signer_cert_and_key()
 
     base_dir = os.path.join(settings.MEDIA_ROOT, "documents", transaction_id)
     os.makedirs(base_dir, exist_ok=True)
@@ -48,8 +82,8 @@ def create_signature_with_openssl(
         "-in", zip_path,
         "-out", output_sig_path,
         "-outform", "DER",
-        "-signer", settings.OPENSSL_CERT_PATH,
-        "-inkey", settings.OPENSSL_KEY_PATH,
+        "-signer", cert_path,
+        "-inkey", key_path,
         "-nosmimecap",
         "-nocerts",
         "-noattr",
@@ -181,10 +215,20 @@ def poll_max_api_status(self, phone_number: str, user_id: int, transaction_id: s
                     paths["sig"] = sig_path
 
                 if "zip" in paths:
-                    output_path = create_signature_with_openssl(
-                        zip_path=paths["zip"],
-                        transaction_id=transaction_id
-                    )
+                    try:
+                        output_path = create_signature_with_openssl(
+                            zip_path=paths["zip"],
+                            transaction_id=transaction_id
+                        )
+                    except OpenSSLSignError as e:
+                        logging.getLogger(__name__).exception(
+                            "OpenSSL signing failed: %s", e
+                        )
+                        client.send_message(
+                            user_id,
+                            "Не удалось подписать документ, попробуйте позднее.",
+                        )
+                        return None
                     upload_res = client.upload_document(file_path=output_path, transaction_id=transaction_id)
 
                     if "fileId" in upload_res:

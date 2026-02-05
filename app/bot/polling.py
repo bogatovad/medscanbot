@@ -2392,6 +2392,7 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
         )
         await create_keyboard(event, context)
         return
+    reservation_success = False
     try:
         cookies_dict = {}
         async with InfoClinicaClient(
@@ -2510,6 +2511,7 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
             except (ValueError, TypeError):
                 date_display = selected_work_date
             if reserve_result.status_code == 200 and reserve_result.json:
+                reservation_success = True
                 reservation_message = (
                     f'✅ Запись на приём успешно создана!\n\n'
                     f'📍 Филиал: {branch_name}\n'
@@ -2525,14 +2527,34 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
                     else reserve_result.text
                 )
                 reservation_message = f'❌ Ошибка при создании записи: {error_msg or "Неизвестная ошибка"}'
-        await event.message.answer(reservation_message)
+        if reservation_success:
+            builder = InlineKeyboardBuilder()
+            builder.row(
+                CallbackButton(
+                    text='✍️ Подписать документы онлайн',
+                    payload='btn_sign_documents'
+                )
+            )
+            builder.row(
+                CallbackButton(
+                    text='🔙 В главное меню',
+                    payload='back_to_main'
+                )
+            )
+            await event.message.answer(
+                text=reservation_message,
+                attachments=[builder.as_markup()]
+            )
+        else:
+            await event.message.answer(reservation_message)
     except Exception as e:
         logging.error(f"Ошибка при подтверждении записи: {e}", exc_info=True)
         await event.message.answer(
             f'⚠️ Произошла ошибка при создании записи: {str(e)}\n\n'
             'Попробуйте позже или обратитесь в поддержку.'
         )
-    await create_keyboard(event, context)
+    if not reservation_success:
+        await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'back_to_doctors')

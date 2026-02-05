@@ -14,7 +14,7 @@ ENV PYTHONFAULTHANDLER=1 \
 EXPOSE 8000
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libpq5 \
+  && apt-get install -y --no-install-recommends libpq5 openssl \
   && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/* \
   && pip install idna "poetry==$POETRY_VERSION" && poetry --version
 
