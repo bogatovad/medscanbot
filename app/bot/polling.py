@@ -1409,6 +1409,7 @@ async def handle_age_input(event: MessageCreated, context: MemoryContext):
     await event.message.answer(msg.MSG_AGE_JOKE)
 
 
+# todo: не уверен что этот блок кода вообще нужен.
 # @dp.message_callback(F.callback.payload == 'has_account')
 # async def handle_has_account(event: MessageCallback, context: MemoryContext):
 #     """Обработчик кнопки 'У меня есть аккаунт'"""
@@ -1437,6 +1438,7 @@ async def handle_new_user(event: MessageCallback, context: MemoryContext):
     await event.message.answer(msg.MSG_REGISTRATION_NEW_USER)
 
 
+# todo: не уверен что этот блок кода вообще нужен.
 @dp.message_created(F.message.body.text, LoginForm.username)
 async def handle_login_username(event: MessageCreated, context: MemoryContext):
     """Обработка ввода логина"""
