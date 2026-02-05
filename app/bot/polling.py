@@ -89,10 +89,12 @@ async def handle_personal_cabinet(event: MessageCallback, context: MemoryContext
     """Кнопка «Личный кабинет» — показываем данные из БД и дату регистрации."""
     await event.message.delete()
     user = await user_svc.get_user_by_max_id(context.user_id)
+
     if not user:
         await event.message.answer(msg.MSG_USER_NOT_FOUND_START)
         await create_keyboard(event, context)
         return
+
     reg_date = user.registered_at
     reg_str = reg_date.strftime("%d.%m.%Y %H:%M") if reg_date and hasattr(reg_date, "strftime") else str(reg_date)
     text = msg.PERSONAL_CABINET_TEMPLATE.format(
@@ -121,29 +123,38 @@ async def handle_change_credentials_data(event: MessageCreated, context: MemoryC
     """Введены логин и пароль — обновляем cllogin в БД и отправляем оба значения в МИС (PUT credentials)."""
     await context.set_state(None)
     parsed = parse_login_password((event.message.body.text or "").strip())
+
     if not parsed:
         await event.message.answer(msg.MSG_NEED_TWO_LINES)
         return
+
     new_login, new_password = parsed
+
     if not new_login or not new_password:
         await event.message.answer(msg.MSG_LOGIN_PASSWORD_EMPTY)
         return
+
     id_max = context.user_id
+
     try:
         user = await user_svc.get_user_by_max_id(id_max)
+
         if not user:
             await event.message.answer(msg.MSG_USER_NOT_FOUND)
             await create_keyboard(event, context)
             return
+
         pcode = str(user.pcode)
         await user_svc.update_user_credentials(id_max, cllogin=new_login, clpassword=new_password)
         creds = UpdatePatientCredentialsPayload(cllogin=new_login, clpassword=new_password)
         status, resp_json = await infoclinica_svc.update_patient_credentials(pcode, creds)
+
         if status in (200, 204):
             await event.message.answer(msg.MSG_CREDENTIALS_UPDATED)
         else:
             err = (resp_json or {}).get("message") if isinstance(resp_json, dict) else "Ошибка МИС"
             await event.message.answer(msg.MSG_CREDENTIALS_UPDATED_BOT_ONLY.format(err))
+
         await create_keyboard(event, context)
     except Exception as e:
         logging.exception("Ошибка при смене логина и пароля")
@@ -156,10 +167,12 @@ async def handle_delete_account(event: MessageCallback, context: MemoryContext):
     """Удаление аккаунта из БД по кнопке «Удалить аккаунт» в личном кабинете."""
     await event.message.delete()
     deleted = await user_svc.delete_user_by_max_id(context.user_id)
+
     if deleted:
         await event.message.answer(msg.MSG_ACCOUNT_DELETED)
     else:
         await event.message.answer(msg.MSG_ACCOUNT_NOT_FOUND)
+
     await create_keyboard(event, context)
 
 
@@ -195,14 +208,18 @@ async def handle_lk_registration_data(event: MessageCreated, context: MemoryCont
             clpassword=payload["clpassword"],
         )
         status, resp_json = await infoclinica_svc.create_patient(create_payload)
+
         if status not in (200, 201):
             err = (resp_json or {}).get("message") if isinstance(resp_json, dict) else "Ошибка регистрации в МИС"
             await event.message.answer(msg.MSG_REGISTRATION_FAILED_MIS.format(err))
             return
+
         pcode = resp_json.get("pcode") if isinstance(resp_json, dict) else resp_json if isinstance(resp_json, str) else None
+
         if not pcode:
             await event.message.answer(msg.MSG_PCODE_NOT_FOUND)
             return
+
         await user_svc.save_registered_user(
             id_max=id_max,
             pcode=str(pcode),
@@ -244,10 +261,12 @@ async def handle_info_mission(event: MessageCallback, context: MemoryContext):
     attachments = [builder.as_markup()]
     temp_image_path = None
     image_url = INFO_IMAGE_URLS.get("mission", "")
+
     if image_url:
         temp_image_path = await download_image_to_temp(image_url)
         if temp_image_path:
             attachments.insert(0, InputMedia(path=temp_image_path))
+
     await event.message.answer(text=TEXT_MISSION, attachments=attachments)
     if temp_image_path and os.path.exists(temp_image_path):
         try:
@@ -271,10 +290,12 @@ async def _info_subpage_with_image(key: str):
     builder = build_info_back_keyboard('info_organizations')
     attachments = [builder.as_markup()]
     temp_path = None
+
     if key in INFO_IMAGE_URLS:
         temp_path = await download_image_to_temp(INFO_IMAGE_URLS[key])
         if temp_path:
             attachments.insert(0, InputMedia(path=temp_path))
+
     return attachments, temp_path
 
 
@@ -283,6 +304,7 @@ async def handle_info_hadassah(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     attachments, temp_path = await _info_subpage_with_image("hadassah")
     await event.message.answer(text=TEXT_HADASSAH, attachments=attachments)
+
     if temp_path and os.path.exists(temp_path):
         try:
             os.unlink(temp_path)
@@ -295,6 +317,7 @@ async def handle_info_yauza(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     attachments, temp_path = await _info_subpage_with_image("yauza")
     await event.message.answer(text=TEXT_YAUZA, attachments=attachments)
+
     if temp_path and os.path.exists(temp_path):
         try:
             os.unlink(temp_path)
@@ -307,6 +330,7 @@ async def handle_info_medscan_llc(event: MessageCallback, context: MemoryContext
     await event.message.delete()
     attachments, temp_path = await _info_subpage_with_image("medscan_llc")
     await event.message.answer(text=TEXT_MEDSCAN_LLC, attachments=attachments)
+
     if temp_path and os.path.exists(temp_path):
         try:
             os.unlink(temp_path)
@@ -319,6 +343,7 @@ async def handle_info_medassist_kursk(event: MessageCallback, context: MemoryCon
     await event.message.delete()
     attachments, temp_path = await _info_subpage_with_image("medassist_kursk")
     await event.message.answer(text=TEXT_MEDASSIST_KURSK, attachments=attachments)
+
     if temp_path and os.path.exists(temp_path):
         try:
             os.unlink(temp_path)
@@ -331,6 +356,7 @@ async def handle_info_medical_on_group(event: MessageCallback, context: MemoryCo
     await event.message.delete()
     attachments, temp_path = await _info_subpage_with_image("medical_on_group")
     await event.message.answer(text=TEXT_MEDICAL_ON_GROUP, attachments=attachments)
+
     if temp_path and os.path.exists(temp_path):
         try:
             os.unlink(temp_path)
@@ -343,6 +369,7 @@ async def handle_info_kdl(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     attachments, temp_path = await _info_subpage_with_image("kdl")
     await event.message.answer(text=TEXT_KDL, attachments=attachments)
+
     if temp_path and os.path.exists(temp_path):
         try:
             os.unlink(temp_path)
@@ -359,91 +386,91 @@ async def handle_info_contacts(event: MessageCallback, context: MemoryContext):
     )
 
 
-@dp.message_callback(F.callback.payload == 'back_to_auth_choice')
-async def handle_back_to_auth_choice(event: MessageCallback, context: MemoryContext):
-    """Возврат к выбору: есть аккаунт или новый пользователь"""
-    await context.set_state(None)
-    await event.message.delete()
-    
-    # Получаем данные из контекста для восстановления информации о выбранном времени
-    data = await context.get_data()
-    selected_time = data.get('selected_time')
-    selected_work_date = data.get('selected_work_date')
-    
-    if selected_time and selected_work_date:
-        # Получаем информацию о выбранных данных
-        branch_id = data.get('selected_branch_id')
-        department_id = data.get('selected_department_id')
-        doctor_id = data.get('selected_doctor_id')
-        doctor_dcode = data.get('selected_doctor_dcode')
-        branches = data.get('branches_list', [])
-        departments = data.get('departments_list', [])
-        doctors = data.get('doctors_list', [])
-        
-        branch_name = "Филиал"
-        for branch in branches:
-            if str(branch.get("id")) == branch_id:
-                branch_name = branch.get("name", "Филиал")
-                break
-        
-        department_name = "Отделение"
-        for department in departments:
-            if str(department.get("id")) == department_id:
-                department_name = department.get("name", "Отделение")
-                break
-        
-        doctor_name = "Врач"
-        for doctor in doctors:
-            if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
-                doctor_name = doctor.get("name", "Врач")
-                break
-        
-        # Показываем кнопки выбора: есть аккаунт или новый пользователь
-        builder = InlineKeyboardBuilder()
-        builder.row(
-            CallbackButton(
-                text='✅ У меня есть аккаунт',
-                payload='has_account'
-            )
-        )
-        builder.row(
-            CallbackButton(
-                text='➕ Новый пользователь',
-                payload='new_user'
-            )
-        )
-        builder.row(
-            CallbackButton(
-                text='✍️ Подписать документы онлайн',
-                payload='btn_sign_documents'
-            )
-        )
-        builder.row(
-            CallbackButton(
-                text='🔙 Назад к выбору даты',
-                payload='back_to_schedule'
-            )
-        )
-        
-        # Форматируем дату для отображения
-        try:
-            date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
-            date_display = date_obj.strftime("%d.%m.%Y")
-        except (ValueError, TypeError):
-            date_display = selected_work_date
-        
-        await event.message.answer(
-            text=msg.MSG_TIME_SELECTED_LOGIN_REQUIRED.format(
-                selected_time=selected_time,
-                date_display=date_display,
-                branch_name=branch_name,
-                department_name=department_name,
-                doctor_name=doctor_name,
-            ),
-            attachments=[builder.as_markup()]
-        )
-    else:
-        await create_keyboard(event, context)
+# @dp.message_callback(F.callback.payload == 'back_to_auth_choice')
+# async def handle_back_to_auth_choice(event: MessageCallback, context: MemoryContext):
+#     """Возврат к выбору: есть аккаунт или новый пользователь"""
+#     await context.set_state(None)
+#     await event.message.delete()
+#     
+#     # Получаем данные из контекста для восстановления информации о выбранном времени
+#     data = await context.get_data()
+#     selected_time = data.get('selected_time')
+#     selected_work_date = data.get('selected_work_date')
+#     
+#     if selected_time and selected_work_date:
+#         # Получаем информацию о выбранных данных
+#         branch_id = data.get('selected_branch_id')
+#         department_id = data.get('selected_department_id')
+#         doctor_id = data.get('selected_doctor_id')
+#         doctor_dcode = data.get('selected_doctor_dcode')
+#         branches = data.get('branches_list', [])
+#         departments = data.get('departments_list', [])
+#         doctors = data.get('doctors_list', [])
+#         
+#         branch_name = "Филиал"
+#         for branch in branches:
+#             if str(branch.get("id")) == branch_id:
+#                 branch_name = branch.get("name", "Филиал")
+#                 break
+#         
+#         department_name = "Отделение"
+#         for department in departments:
+#             if str(department.get("id")) == department_id:
+#                 department_name = department.get("name", "Отделение")
+#                 break
+#         
+#         doctor_name = "Врач"
+#         for doctor in doctors:
+#             if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
+#                 doctor_name = doctor.get("name", "Врач")
+#                 break
+#         
+#         # Показываем кнопки выбора: есть аккаунт или новый пользователь
+#         builder = InlineKeyboardBuilder()
+#         builder.row(
+#             CallbackButton(
+#                 text='✅ У меня есть аккаунт',
+#                 payload='has_account'
+#             )
+#         )
+#         builder.row(
+#             CallbackButton(
+#                 text='➕ Новый пользователь',
+#                 payload='new_user'
+#             )
+#         )
+#         builder.row(
+#             CallbackButton(
+#                 text='✍️ Подписать документы онлайн',
+#                 payload='btn_sign_documents'
+#             )
+#         )
+#         builder.row(
+#             CallbackButton(
+#                 text='🔙 Назад к выбору даты',
+#                 payload='back_to_schedule'
+#             )
+#         )
+#         
+#         # Форматируем дату для отображения
+#         try:
+#             date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
+#             date_display = date_obj.strftime("%d.%m.%Y")
+#         except (ValueError, TypeError):
+#             date_display = selected_work_date
+#         
+#         await event.message.answer(
+#             text=msg.MSG_TIME_SELECTED_LOGIN_REQUIRED.format(
+#                 selected_time=selected_time,
+#                 date_display=date_display,
+#                 branch_name=branch_name,
+#                 department_name=department_name,
+#                 doctor_name=doctor_name,
+#             ),
+#             attachments=[builder.as_markup()]
+#         )
+#     else:
+#         await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'back_to_login_username')
@@ -477,36 +504,46 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
     """Показать список текущих записей на приём (от сегодня на год вперёд). Требуется регистрация и авторизация в МИС."""
     await event.message.delete()
     user = await user_svc.get_user_by_max_id(context.user_id)
+
     if not user:
         await event.message.answer(msg.MSG_NEED_REGISTRATION_FOR_RECORDS)
         await create_keyboard(event, context)
         return
+
     try:
         result = await infoclinica_svc.authorize_user(user.cllogin, user.clpassword)
         cookies_dict = result.get("cookies_dict") or {}
+
         if not result.get("success"):
             error_msg = result.get("error", "Ошибка авторизации в МИС")
             await event.message.answer(msg.MSG_LOGIN_FAILED_RECORDS.format(error_msg))
             await create_keyboard(event, context)
             return
+
         if not cookies_dict:
             await event.message.answer(msg.MSG_SESSION_NOT_RECEIVED)
             await create_keyboard(event, context)
             return
+
         today = date.today()
         st = today.strftime("%Y%m%d")
         en = (today + timedelta(days=365)).strftime("%Y%m%d")
         status, list_json = await infoclinica_svc.get_records_list(cookies_dict, st=st, en=en, start=0, length=100)
+
         if status != 200 or not list_json:
             await event.message.answer(msg.MSG_RECORDS_LOAD_FAILED)
             await create_keyboard(event, context)
             return
+
         data = list_json.get("data") or []
+
         if not data:
             await event.message.answer(msg.MSG_NO_RECORDS)
             await create_keyboard(event, context)
             return
+
         lines = [msg.RECORDS_HEADER]
+
         for i, rec in enumerate(data, 1):
             work_date = rec.get('workDate') or ''
             try:
@@ -515,6 +552,7 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
                     work_date = dt.strftime('%d.%m.%Y')
             except (ValueError, TypeError):
                 pass
+
             filial_name = rec.get('filialName') or '—'
             filial_address = rec.get('filialAddress') or '—'
             filial_phone = rec.get('filialPhone') or '—'
@@ -544,18 +582,12 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
 )
 async def handle_contact(event: Message, context: MemoryContext):
     contact = next(a for a in event.message.body.attachments if a.type == AttachmentType.CONTACT)
-
     vcf = contact.payload.vcf_info
     phone_number = vcf.split("TEL;TYPE=cell:")[1].split("\r\n")[0] if "TEL;TYPE=cell:" in vcf else "не найден"
-
     client = MaxApiClient()
-
     res = await client.send_pep_sing(phone_number=phone_number)
-
     transaction_id = res.get("transactionId")
-
     poll_max_api_status.delay(f"+{phone_number}", context.user_id, transaction_id)
-
     await event.message.delete()
     await event.message.answer(msg.MSG_PHONE_RECEIVED.format(phone_number))
 
@@ -563,9 +595,7 @@ async def handle_contact(event: Message, context: MemoryContext):
 @dp.message_callback(F.callback.payload == 'btn_sign_documents')
 async def handle_sign_documents_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
-
     text = msg.MSG_SIGN_DOCUMENTS_INTRO
-
     attachments = [
         Attachment(
             type=AttachmentType.INLINE_KEYBOARD,
@@ -580,16 +610,13 @@ async def handle_sign_documents_button(event: MessageCallback, context: MemoryCo
             )
         )
     ]
-
     builder = InlineKeyboardBuilder()
-
     builder.row(
         CallbackButton(
             text='🔙 Назад',
             payload='back_to_main'
         )
     )
-
     await event.message.answer(
         text=text,
         attachments=attachments,
@@ -608,9 +635,11 @@ async def create_branches_keyboard(event, context: MemoryContext, page: int = 0)
     """Создает клавиатуру со списком филиалов с пагинацией (данные из сервиса, разметка из UI)."""
     data = await context.get_data()
     branches = data.get("branches_list")
+
     if not branches:
         branches = await infoclinica_svc.get_branches()
         await context.update_data(branches_list=branches, branches_page=0)
+
     await context.update_data(branches_page=page)
     return build_branches_keyboard(branches, page)
 
@@ -619,10 +648,12 @@ async def create_branches_keyboard(event, context: MemoryContext, page: int = 0)
 async def handle_make_appointment_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
     user = await user_svc.get_user_by_max_id(context.user_id)
+
     if not user:
         await event.message.answer(msg.MSG_NEED_REGISTRATION_FOR_APPOINTMENT)
         await create_keyboard(event, context)
         return
+
     # Очищаем предыдущие данные о филиалах
     await context.update_data(branches_list=None, branches_page=0)
     builder, text = await create_branches_keyboard(event, context, page=0)
@@ -636,7 +667,6 @@ async def handle_make_appointment_button(event: MessageCallback, context: Memory
 async def handle_branches_pagination(event: MessageCallback, context: MemoryContext):
     # Извлекаем номер страницы из payload
     page = int(event.callback.payload.split('_')[-1])
-    
     builder, text = await create_branches_keyboard(event, context, page=page)
     
     # Удаляем старое сообщение и отправляем новое с обновленной страницей
@@ -653,6 +683,7 @@ async def create_departments_keyboard(event, context: MemoryContext, page: int =
     departments = data.get("departments_list")
     branch_id = data.get("selected_branch_id")
     cached_branch_id = data.get("departments_cached_branch_id")
+
     if not departments or cached_branch_id != branch_id:
         filial_id = int(branch_id) if branch_id else None
         departments = await infoclinica_svc.get_departments(filial_id=filial_id)
@@ -661,6 +692,7 @@ async def create_departments_keyboard(event, context: MemoryContext, page: int =
             departments_page=0,
             departments_cached_branch_id=branch_id,
         )
+
     await context.update_data(departments_page=page)
     return build_departments_keyboard(departments, page)
 
@@ -675,6 +707,7 @@ async def handle_branch_selection(event: MessageCallback, context: MemoryContext
     branches = data.get('branches_list', [])
     
     selected_branch = None
+
     for branch in branches:
         if str(branch.get("id")) == branch_id:
             selected_branch = branch
@@ -719,6 +752,7 @@ async def handle_departments_pagination(event: MessageCallback, context: MemoryC
     branch_id = data.get('selected_branch_id')
     branches = data.get('branches_list', [])
     branch_name = "Филиал"
+
     for branch in branches:
         if str(branch.get("id")) == branch_id:
             branch_name = branch.get("name", "Филиал")
@@ -735,14 +769,17 @@ async def handle_departments_pagination(event: MessageCallback, context: MemoryC
 def _branch_department_names(data: dict) -> tuple[str, str]:
     """Из контекста достаёт названия выбранного филиала и отделения."""
     branch_name, department_name = "Филиал", "Отделение"
+
     for b in data.get("branches_list") or []:
         if str(b.get("id")) == data.get("selected_branch_id"):
             branch_name = b.get("name", "Филиал")
             break
+
     for d in data.get("departments_list") or []:
         if str(d.get("id")) == data.get("selected_department_id"):
             department_name = d.get("name", "Отделение")
             break
+
     return branch_name, department_name
 
 
@@ -754,6 +791,7 @@ async def create_doctors_keyboard(event, context: MemoryContext, page: int = 0):
     department_id = data.get("selected_department_id")
     cached_branch_id = data.get("doctors_cached_branch_id")
     cached_department_id = data.get("doctors_cached_department_id")
+
     if not doctors or cached_branch_id != branch_id or cached_department_id != department_id:
         filial_id = int(branch_id) if branch_id else None
         dept_id = int(department_id) if department_id else None
@@ -764,6 +802,7 @@ async def create_doctors_keyboard(event, context: MemoryContext, page: int = 0):
             doctors_cached_branch_id=branch_id,
             doctors_cached_department_id=department_id,
         )
+
     await context.update_data(doctors_page=page)
     branch_name, department_name = _branch_department_names(data)
     return build_doctors_keyboard(doctors, page, branch_name, department_name)
@@ -779,6 +818,7 @@ async def handle_department_selection(event: MessageCallback, context: MemoryCon
     departments = data.get('departments_list', [])
     
     selected_department = None
+
     for department in departments:
         if str(department.get("id")) == department_id:
             selected_department = department
@@ -915,7 +955,6 @@ async def handle_date_selection(event: MessageCallback, context: MemoryContext):
         
         # Получаем ID филиала
         safe_int(branch_id)
-        
         next_day = (selected_date + timedelta(days=1)).strftime("%Y%m%d")
         selected_date_str = selected_date.strftime("%Y%m%d")
         intervals_data = await infoclinica_svc.get_reservation_intervals(
@@ -924,6 +963,7 @@ async def handle_date_selection(event: MessageCallback, context: MemoryContext):
             dcode=doctor_dcode,
             online_mode=0,
         )
+
         if not intervals_data:
             intervals_data = {}
         
@@ -1180,10 +1220,12 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
     """Подтверждение записи: авторизация в МИС по данным из БД и создание записи."""
     await event.message.delete()
     user = await user_svc.get_user_by_max_id(context.user_id)
+
     if not user:
         await event.message.answer(msg.MSG_USER_NOT_FOUND_FOR_APPOINTMENT)
         await create_keyboard(event, context)
         return
+
     data = await context.get_data()
     selected_time = data.get('selected_time')
     selected_work_date = data.get('selected_work_date')
@@ -1191,23 +1233,29 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
     selected_doctor_dcode = data.get('selected_doctor_dcode')
     selected_branch_id = data.get('selected_branch_id')
     selected_department_id = data.get('selected_department_id')
+
     if not (selected_time and selected_work_date and selected_schedident and selected_doctor_dcode):
         await event.message.answer(msg.MSG_INSUFFICIENT_DATA_FOR_RECORD)
         await create_keyboard(event, context)
         return
+
     reservation_success = False
+
     try:
         result = await infoclinica_svc.authorize_user(user.cllogin, user.clpassword)
         cookies_dict = result.get("cookies_dict") or {}
+
         if not result.get("success"):
             error_msg = result.get('error', 'Ошибка авторизации в МИС')
             await event.message.answer(msg.MSG_LOGIN_FAILED_APPOINTMENT.format(error_msg))
             await create_keyboard(event, context)
             return
+
         if not cookies_dict:
             await event.message.answer(msg.MSG_SESSION_NOT_RECEIVED)
             await create_keyboard(event, context)
             return
+
         intervals_data = await infoclinica_svc.get_reservation_intervals_authenticated(
             cookies_dict,
             st=selected_work_date,
@@ -1222,6 +1270,7 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
         )
         depnum = None
         found_interval = None
+
         for interval in intervals_list:
             interval_schedident = interval.get("schedident") or interval.get("schedIdent")
             interval_time = interval.get("startInterval") or interval.get("start")
@@ -1229,18 +1278,22 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
                 depnum = interval.get("depnum") or interval.get("depNum")
                 found_interval = interval
                 break
+
         if not depnum and intervals_list:
             for interval in intervals_list:
                 if (interval.get("startInterval") or interval.get("start")) == selected_time:
                     depnum = interval.get("depnum") or interval.get("depNum")
                     found_interval = interval
                     break
+
         if not depnum:
             depnum = selected_department_id
+
         if found_interval and not found_interval.get("isFree", True):
             await event.message.answer(msg.MSG_TIME_ALREADY_TAKEN)
             await create_keyboard(event, context)
             return
+
         end_time = add_30_minutes(selected_time)
         reserve_payload = InfoClinicaReservationReservePayload(
             date=selected_work_date,
@@ -1262,16 +1315,19 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
         departments = data.get("departments_list", [])
         doctors = data.get("doctors_list", [])
         branch_name = "Филиал"
+
         for branch in branches:
             if str(branch.get("id")) == str(selected_branch_id):
                 branch_name = branch.get("name", "Филиал")
                 break
         department_name = "Отделение"
+
         for department in departments:
             if str(department.get("id")) == str(selected_department_id):
                 department_name = department.get("name", "Отделение")
                 break
         doctor_name = "Врач"
+
         for doctor in doctors:
             if str(doctor.get("dcode")) == str(selected_doctor_dcode):
                 doctor_name = doctor.get("name", "Врач")
@@ -1281,6 +1337,7 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
             date_display = date_obj.strftime("%d.%m.%Y")
         except (ValueError, TypeError):
             date_display = selected_work_date
+
         if reserve_status == 200 and reserve_result:
             reservation_success = True
             reservation_message = msg.MSG_RESERVATION_SUCCESS.format(
@@ -1293,6 +1350,7 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
         else:
             error_msg = (reserve_result or {}).get("error") if isinstance(reserve_result, dict) else "Неизвестная ошибка"
             reservation_message = msg.MSG_RESERVATION_ERROR.format(error_msg)
+
         if reservation_success:
             await event.message.answer(
                 text=reservation_message,
@@ -1303,6 +1361,7 @@ async def handle_confirm_reservation(event: MessageCallback, context: MemoryCont
     except Exception as e:
         logging.error(f"Ошибка при подтверждении записи: {e}", exc_info=True)
         await event.message.answer(msg.MSG_CREATE_RECORD_ERROR.format(str(e)))
+
     if not reservation_success:
         await create_keyboard(event, context)
 
@@ -1330,7 +1389,6 @@ async def handle_back_to_doctors(event: MessageCallback, context: MemoryContext)
             break
     
     builder, text = await create_doctors_keyboard(event, context, page=current_page)
-    
     await event.message.delete()
     await event.message.answer(
         text=msg.MSG_SELECTED_BRANCH_DEPT.format(branch_name, department_name, text),
@@ -1341,37 +1399,34 @@ async def handle_back_to_doctors(event: MessageCallback, context: MemoryContext)
 @dp.message_created(F.message.body.text, Form.name)
 async def handle_name_input(event: MessageCreated, context: MemoryContext):
     await context.update_data(name=event.message.body.text)
-
     data = await context.get_data()
-
     await event.message.answer(msg.MSG_NICE_TO_MEET.format(data['name'].title()))
 
 
 @dp.message_created(F.message.body.text, Form.age)
 async def handle_age_input(event: MessageCreated, context: MemoryContext):
     await context.update_data(age=event.message.body.text)
-
     await event.message.answer(msg.MSG_AGE_JOKE)
 
 
-@dp.message_callback(F.callback.payload == 'has_account')
-async def handle_has_account(event: MessageCallback, context: MemoryContext):
-    """Обработчик кнопки 'У меня есть аккаунт'"""
-    await context.set_state(LoginForm.username)
-    await event.message.delete()
-    
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        CallbackButton(
-            text='🔙 Назад',
-            payload='back_to_auth_choice'
-        )
-    )
-    
-    await event.message.answer(
-        text=msg.MSG_ENTER_LOGIN,
-        attachments=[builder.as_markup()]
-    )
+# @dp.message_callback(F.callback.payload == 'has_account')
+# async def handle_has_account(event: MessageCallback, context: MemoryContext):
+#     """Обработчик кнопки 'У меня есть аккаунт'"""
+#     await context.set_state(LoginForm.username)
+#     await event.message.delete()
+#
+#     builder = InlineKeyboardBuilder()
+#     builder.row(
+#         CallbackButton(
+#             text='🔙 Назад',
+#             payload='back_to_auth_choice'
+#         )
+#     )
+#
+#     await event.message.answer(
+#         text=msg.MSG_ENTER_LOGIN,
+#         attachments=[builder.as_markup()]
+#     )
 
 
 @dp.message_callback(F.callback.payload == 'new_user')
@@ -1387,7 +1442,6 @@ async def handle_login_username(event: MessageCreated, context: MemoryContext):
     """Обработка ввода логина"""
     await context.update_data(login_username=event.message.body.text)
     await context.set_state(LoginForm.password)
-    
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(
