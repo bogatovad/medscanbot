@@ -569,23 +569,15 @@ async def handle_info_mission(event: MessageCallback, context: MemoryContext):
     # Добавление изображения
     attachments = [builder.as_markup()]
     
-    image_url = "https://habrastorage.org/webt/hq/fe/ui/hqfeui_hs7pynvx3benxl9xuaqi.png"
-    temp_image_path = await download_image_to_temp(image_url)
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    image_url = "static/image/info_mission.png"
+
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
     
     await event.message.answer(
         text=mission_text,
         attachments=attachments
     )
-    
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_organizations')
@@ -673,24 +665,15 @@ async def handle_info_hadassah(event: MessageCallback, context: MemoryContext):
     
     attachments = [builder.as_markup()]
 
-    # Скачиваем изображение по URL во временный файл
-    image_url = "https://habrastorage.org/webt/py/-p/-x/py-p-x30iedbbmaxylu84k51oyg.jpeg"
-    temp_image_path = await download_image_to_temp(image_url)
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    image_url = "static/image/hadassah.jpeg"
+
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
     
     await event.message.answer(
         text=hadassah_text,
         attachments=attachments
     )
-    
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
 
 
 @dp.message_callback(F.callback.payload == 'info_yauza')
@@ -722,24 +705,16 @@ async def handle_info_yauza(event: MessageCallback, context: MemoryContext):
     # Добавление изображения
     attachments = [builder.as_markup()]
 
-    image_url = "https://habrastorage.org/webt/zk/mr/h5/zkmrh5yavsdjs0qeed5efgr-qys.jpeg"
-    temp_image_path = await download_image_to_temp(image_url)
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    image_url = "static/image/yauza.jpeg"
+
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
 
     await event.message.answer(
         text=yauza_text,
         attachments=attachments
     )
     
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
-
 
 @dp.message_callback(F.callback.payload == 'info_medscan_llc')
 async def handle_info_medscan_llc(event: MessageCallback, context: MemoryContext):
@@ -764,25 +739,16 @@ async def handle_info_medscan_llc(event: MessageCallback, context: MemoryContext
     # Добавление изображения
     attachments = [builder.as_markup()]
 
-    image_url = "https://habrastorage.org/webt/3w/l0/kx/3wl0kxuhplibz2gr8nroczfudc4.jpeg"
-    temp_image_path = await download_image_to_temp(image_url)
+    image_url = "static/image/medscan_llc.jpeg"
 
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
 
     await event.message.answer(
         text=medscan_llc_text,
         attachments=attachments
     )
     
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
-
 
 @dp.message_callback(F.callback.payload == 'info_medassist_kursk')
 async def handle_info_medassist_kursk(event: MessageCallback, context: MemoryContext):
@@ -817,25 +783,16 @@ async def handle_info_medassist_kursk(event: MessageCallback, context: MemoryCon
     # Добавление изображения
     attachments = [builder.as_markup()]
 
-    image_url = "https://habrastorage.org/webt/jk/dy/y9/jkdyy9rxrmkxrs9w60f7gls7npi.jpeg"
-    temp_image_path = await download_image_to_temp(image_url)
+    image_url = "static/image/medassist_kursk.jpeg"
 
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
     
     await event.message.answer(
         text=medassist_kursk_text,
         attachments=attachments
     )
     
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
-
 
 @dp.message_callback(F.callback.payload == 'info_medical_on_group')
 async def handle_info_medical_on_group(event: MessageCallback, context: MemoryContext):
@@ -866,25 +823,16 @@ async def handle_info_medical_on_group(event: MessageCallback, context: MemoryCo
     # Добавление изображения
     attachments = [builder.as_markup()]
 
-    image_url = "https://habrastorage.org/webt/t7/h0/kv/t7h0kvo2qiyrq5qzmlkwqhhp86c.png"
-    temp_image_path = await download_image_to_temp(image_url)
+    image_url = "static/image/medical_on_group.png"
 
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
 
     await event.message.answer(
         text=medical_on_group_text,
         attachments=attachments
     )
     
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
-
 
 @dp.message_callback(F.callback.payload == 'info_kdl')
 async def handle_info_kdl(event: MessageCallback, context: MemoryContext):
@@ -913,25 +861,16 @@ async def handle_info_kdl(event: MessageCallback, context: MemoryContext):
     # Добавление изображения
     attachments = [builder.as_markup()]
 
-    image_url = "https://habrastorage.org/webt/ej/qy/4m/ejqy4mjuqembfed-p5fnrjeqiou.jpeg"
-    temp_image_path = await download_image_to_temp(image_url)
+    image_url = "static/image/kdl.jpeg"
 
-    if temp_image_path:
-        photo = InputMedia(path=temp_image_path)
-        attachments.insert(0, photo)
+    photo = InputMedia(path=image_url)
+    attachments.insert(0, photo)
 
     await event.message.answer(
         text=kdl_text,
         attachments=attachments
     )
     
-    # Удаляем временный файл после отправки
-    if temp_image_path and os.path.exists(temp_image_path):
-        try:
-            os.unlink(temp_image_path)
-        except Exception:
-            pass  # Игнорируем ошибки удаления
-
 
 @dp.message_callback(F.callback.payload == 'info_contacts')
 async def handle_info_contacts(event: MessageCallback, context: MemoryContext):

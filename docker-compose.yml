@@ -34,9 +34,11 @@ services:
   bot:
     build: .
     container_name: med_scan_bot
-    command: poetry run python /opt/app/bot/polling.py
+    command: poetry run python app/bot/polling.py
+    environment:
+      PYTHONPATH: /opt/services/app/src
     volumes:
-      - .:/opt:Z
+      - .:/opt/services/app/src:Z
     env_file:
       - .env
     depends_on:
