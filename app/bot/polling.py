@@ -386,93 +386,6 @@ async def handle_info_contacts(event: MessageCallback, context: MemoryContext):
     )
 
 
-# @dp.message_callback(F.callback.payload == 'back_to_auth_choice')
-# async def handle_back_to_auth_choice(event: MessageCallback, context: MemoryContext):
-#     """Возврат к выбору: есть аккаунт или новый пользователь"""
-#     await context.set_state(None)
-#     await event.message.delete()
-#     
-#     # Получаем данные из контекста для восстановления информации о выбранном времени
-#     data = await context.get_data()
-#     selected_time = data.get('selected_time')
-#     selected_work_date = data.get('selected_work_date')
-#     
-#     if selected_time and selected_work_date:
-#         # Получаем информацию о выбранных данных
-#         branch_id = data.get('selected_branch_id')
-#         department_id = data.get('selected_department_id')
-#         doctor_id = data.get('selected_doctor_id')
-#         doctor_dcode = data.get('selected_doctor_dcode')
-#         branches = data.get('branches_list', [])
-#         departments = data.get('departments_list', [])
-#         doctors = data.get('doctors_list', [])
-#         
-#         branch_name = "Филиал"
-#         for branch in branches:
-#             if str(branch.get("id")) == branch_id:
-#                 branch_name = branch.get("name", "Филиал")
-#                 break
-#         
-#         department_name = "Отделение"
-#         for department in departments:
-#             if str(department.get("id")) == department_id:
-#                 department_name = department.get("name", "Отделение")
-#                 break
-#         
-#         doctor_name = "Врач"
-#         for doctor in doctors:
-#             if str(doctor.get("id")) == doctor_id or str(doctor.get("dcode")) == str(doctor_dcode):
-#                 doctor_name = doctor.get("name", "Врач")
-#                 break
-#         
-#         # Показываем кнопки выбора: есть аккаунт или новый пользователь
-#         builder = InlineKeyboardBuilder()
-#         builder.row(
-#             CallbackButton(
-#                 text='✅ У меня есть аккаунт',
-#                 payload='has_account'
-#             )
-#         )
-#         builder.row(
-#             CallbackButton(
-#                 text='➕ Новый пользователь',
-#                 payload='new_user'
-#             )
-#         )
-#         builder.row(
-#             CallbackButton(
-#                 text='✍️ Подписать документы онлайн',
-#                 payload='btn_sign_documents'
-#             )
-#         )
-#         builder.row(
-#             CallbackButton(
-#                 text='🔙 Назад к выбору даты',
-#                 payload='back_to_schedule'
-#             )
-#         )
-#         
-#         # Форматируем дату для отображения
-#         try:
-#             date_obj = datetime.strptime(selected_work_date, "%Y%m%d").date()
-#             date_display = date_obj.strftime("%d.%m.%Y")
-#         except (ValueError, TypeError):
-#             date_display = selected_work_date
-#         
-#         await event.message.answer(
-#             text=msg.MSG_TIME_SELECTED_LOGIN_REQUIRED.format(
-#                 selected_time=selected_time,
-#                 date_display=date_display,
-#                 branch_name=branch_name,
-#                 department_name=department_name,
-#                 doctor_name=doctor_name,
-#             ),
-#             attachments=[builder.as_markup()]
-#         )
-#     else:
-#         await create_keyboard(event, context)
-
-
 @dp.message_callback(F.callback.payload == 'back_to_login_username')
 async def handle_back_to_login_username(event: MessageCallback, context: MemoryContext):
     """Возврат к вводу логина"""
@@ -1409,27 +1322,6 @@ async def handle_age_input(event: MessageCreated, context: MemoryContext):
     await event.message.answer(msg.MSG_AGE_JOKE)
 
 
-# todo: не уверен что этот блок кода вообще нужен.
-# @dp.message_callback(F.callback.payload == 'has_account')
-# async def handle_has_account(event: MessageCallback, context: MemoryContext):
-#     """Обработчик кнопки 'У меня есть аккаунт'"""
-#     await context.set_state(LoginForm.username)
-#     await event.message.delete()
-#
-#     builder = InlineKeyboardBuilder()
-#     builder.row(
-#         CallbackButton(
-#             text='🔙 Назад',
-#             payload='back_to_auth_choice'
-#         )
-#     )
-#
-#     await event.message.answer(
-#         text=msg.MSG_ENTER_LOGIN,
-#         attachments=[builder.as_markup()]
-#     )
-
-
 @dp.message_callback(F.callback.payload == 'new_user')
 async def handle_new_user(event: MessageCallback, context: MemoryContext):
     """Обработчик кнопки 'Новый пользователь' - начинаем регистрацию"""
@@ -1884,22 +1776,6 @@ async def main():
         BotCommand(
             name='/start',
             description='Перезапустить бота'
-        ),
-        BotCommand(
-            name='/clear',
-            description='Очищает ваш контекст'
-        ),
-        BotCommand(
-            name='/state',
-            description='Показывают ваше контекстное состояние'
-        ),
-        BotCommand(
-            name='/data',
-            description='Показывает вашу контекстную память'
-        ),
-        BotCommand(
-            name='/context',
-            description='Показывают ваше контекстное состояние'
         )
     )
     await dp.start_polling(bot)
