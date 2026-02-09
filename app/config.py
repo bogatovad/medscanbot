@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     OPENSSL_CERT_PATH: str = "/opt/services/app/src/dev_cert.pem"
     OPENSSL_KEY_PATH: str = "/opt/services/app/src/dev_key.pem"
 
+    # Включение авторизации в боте
+    enable_auth: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

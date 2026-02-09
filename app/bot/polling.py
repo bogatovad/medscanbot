@@ -114,6 +114,11 @@ class LkChangeCredentialsForm(StatesGroup):
     data = State()
 
 
+class AuthForm(StatesGroup):
+    """Форма авторизации: две строки — логин (email), пароль."""
+    data = State()
+
+
 @dp.on_started()
 async def on_bot_started():
     logging.info('Бот стартовал!')
@@ -180,6 +185,14 @@ def _build_main_keyboard_buttons(is_registered: bool):
     #         payload='btn_sign_documents'
     #     )
     # )
+    # Добавляем кнопку авторизации, если включена в конфиге
+    if settings.enable_auth:
+        builder.row(
+            CallbackButton(
+                text='🔐 Авторизация',
+                payload='btn_auth'
+            )
+        )
     builder.row(
         CallbackButton(
             text='ℹ️ Информация о Медскан',
@@ -398,7 +411,14 @@ async def handle_lk_registration_button(event: MessageCallback, context: MemoryC
     """Кнопка «Регистрация» — запрашиваем данные одним сообщением."""
     await event.message.delete()
     await context.set_state(LkRegistrationForm.data)
-    await event.message.answer(REGISTRATION_INSTRUCTIONS)
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        CallbackButton(text='🔙 Назад', payload='back_to_main')
+    )
+    await event.message.answer(
+        text=REGISTRATION_INSTRUCTIONS,
+        attachments=[builder.as_markup()]
+    )
 
 
 @dp.message_created(F.message.body.text, LkRegistrationForm.data)
@@ -480,6 +500,81 @@ async def handle_lk_registration_data(event: MessageCreated, context: MemoryCont
         await event.message.answer(
             f"❌ Произошла ошибка при регистрации. Попробуйте позже или обратитесь в поддержку.\n{str(e)[:200]}"
         )
+
+
+# --- Авторизация ---
+
+@dp.message_callback(F.callback.payload == 'btn_auth')
+async def handle_auth_button(event: MessageCallback, context: MemoryContext):
+    """Кнопка «Авторизация» — запрашиваем логин и пароль (2 строки)."""
+    await event.message.delete()
+    # Удаляем сообщения с записями, если они есть
+    await context.set_state(AuthForm.data)
+    await event.message.answer(
+        "🔐 Авторизация\n\n"
+        "Отправьте двумя строками:\n"
+        "1. Email (логин)\n"
+        "2. Пароль"
+    )
+
+
+@dp.message_created(F.message.body.text, AuthForm.data)
+async def handle_auth_data(event: MessageCreated, context: MemoryContext):
+    """Введены логин и пароль — проверяем их в БД."""
+    await context.set_state(None)
+    parsed = _parse_login_password((event.message.body.text or "").strip())
+    if not parsed:
+        await event.message.answer("Нужны две строки: email и пароль. Попробуйте снова.")
+        return
+    
+    login, password = parsed
+    if not login or not password:
+        await event.message.answer("Логин и пароль не должны быть пустыми. Попробуйте снова.")
+        return
+    
+    id_max = context.user_id
+    try:
+        dsm = DatabaseSessionManager.create(settings.DB_URL)
+        async with dsm.get_session() as session:
+            repo = RegisteredUserRepository(session)
+            # Ищем пользователя по логину и паролю
+            user = await repo.get_by_login_and_password(login, password)
+            
+            if user:
+                # Если пользователь найден, проверяем его текущий id_max
+                if user.id_max == id_max:
+                    # Пользователь уже привязан к этому id_max
+                    await event.message.answer("✅ Вы уже авторизованы с этими данными.")
+                    await create_keyboard(event, context)
+                    return
+                elif user.id_max != id_max:
+                    # Аккаунт уже привязан к другому пользователю бота
+                    # Проверяем, не занят ли текущий id_max другим пользователем
+                    existing_user = await repo.get_by_max_id(id_max)
+                    if existing_user and existing_user.id != user.id:
+                        await event.message.answer(
+                            "❌ Ваш текущий аккаунт в боте уже привязан к другому пользователю. "
+                            "Удалите текущую привязку или используйте другой аккаунт."
+                        )
+                        await create_keyboard(event, context)
+                        return
+                    # Перепривязываем аккаунт к текущему id_max
+                    user.id_max = id_max
+                    await session.commit()
+                    await event.message.answer(
+                        "✅ Авторизация успешна! Аккаунт перепривязан к вашему пользователю в боте."
+                    )
+                    await create_keyboard(event, context)
+                    return
+            else:
+                await event.message.answer(
+                    "❌ Неверный логин или пароль. Проверьте введенные данные и попробуйте снова."
+                )
+                await create_keyboard(event, context)
+    except Exception as e:
+        logging.exception("Ошибка при авторизации")
+        await event.message.answer(f"❌ Ошибка: {str(e)[:200]}")
+        await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload == 'btn_info')
@@ -1075,7 +1170,11 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
             )
             await create_keyboard(event, context)
             return
-        lines = ['Ваши текущие записи на приём:\n']
+
+        # Сохраняем ID новых сообщений с записями
+        record_message_ids = []
+
+        # Выводим каждую запись отдельным сообщением с кнопкой отмены
         for i, rec in enumerate(data, 1):
             work_date = rec.get('workDate') or ''
             try:
@@ -1090,7 +1189,11 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
             dep_name = rec.get('depName') or '—'
             doc_name = rec.get('docName') or '—'
             start_time = rec.get('startTime') or '—'
-            block = (
+
+            # Ищем идентификатор записи (может быть id, recordId, reservationId и т.д.)
+            record_id = rec.get('id') or rec.get('recordId') or rec.get('reservationId') or rec.get('schedid') or None
+
+            text = (
                 f'📅 Дата: {work_date} · Время: {start_time}\n'
                 f'📍 Филиал: {filial_name}\n'
                 f'🏠 Адрес: {filial_address}\n'
@@ -1098,14 +1201,132 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
                 f'🏥 Отделение: {dep_name}\n'
                 f'👨‍⚕️ Врач: {doc_name}\n'
             )
-            lines.append(block)
-        text = '\n'.join(lines)
-        await event.message.answer(text)
+            
+            # Создаем кнопку отмены только если есть идентификатор записи
+            builder = InlineKeyboardBuilder()
+            if record_id:
+                builder.row(
+                    CallbackButton(
+                        text='❌ Отменить запись',
+                        payload=f'cancel_record_{record_id}'
+                    )
+                )
+            
+            sent_message = await event.message.answer(
+                text=text,
+                attachments=[builder.as_markup()] if record_id else None
+            )
+            # Сохраняем ID сообщения для последующего удаления
+            # Проверяем различные возможные атрибуты для ID сообщения
+            msg_id = None
+            if sent_message:
+                if hasattr(sent_message, 'id'):
+                    msg_id = sent_message.id
+                elif hasattr(sent_message, 'message_id'):
+                    msg_id = sent_message.message_id
+                elif hasattr(sent_message, 'messageId'):
+                    msg_id = sent_message.messageId
+                elif isinstance(sent_message, dict) and 'id' in sent_message:
+                    msg_id = sent_message['id']
+                elif isinstance(sent_message, dict) and 'message_id' in sent_message:
+                    msg_id = sent_message['message_id']
+            
+            if msg_id:
+                record_message_ids.append(msg_id)
+        
+        # Сохраняем ID сообщений в контексте
+        if record_message_ids:
+            await context.set_data({'record_message_ids': record_message_ids})
     except Exception as e:
         logging.error(f"Ошибка при загрузке записей: {e}", exc_info=True)
         await event.message.answer(
             f'⚠️ Произошла ошибка при загрузке записей: {str(e)}\n\nПопробуйте позже.'
         )
+    await create_keyboard(event, context)
+
+
+@dp.message_callback(F.callback.payload.startswith('cancel_record_'))
+async def handle_cancel_record_button(event: MessageCallback, context: MemoryContext):
+    """Обработчик кнопки отмены записи."""
+    await event.message.delete()
+    # Извлекаем ID записи из payload
+    payload = event.callback.payload
+    record_id = payload.replace('cancel_record_', '')
+    
+    if not record_id:
+        await event.message.answer('❌ Ошибка: не удалось определить идентификатор записи.')
+        await create_keyboard(event, context)
+        return
+    
+    id_max = context.user_id
+    dsm = DatabaseSessionManager.create(settings.DB_URL)
+    async with dsm.get_session() as session:
+        repo = RegisteredUserRepository(session)
+        user = await repo.get_by_max_id(id_max)
+    
+    if not user:
+        await event.message.answer(
+            '❌ Для отмены записи необходима регистрация в системе.'
+        )
+        await create_keyboard(event, context)
+        return
+    
+    try:
+        # Авторизуемся в МИС
+        cookies_dict = {}
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=settings.INFOCLINICA_COOKIES,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+        ) as client:
+            result = await client.authorize_user(user.cllogin, user.clpassword)
+            if result.get('success') and client._client_json.cookies:
+                cookies_dict = dict(client._client_json.cookies)
+        
+        if not result.get('success'):
+            error_msg = result.get('error', 'Ошибка авторизации в МИС')
+            await event.message.answer(
+                f'❌ Не удалось войти в систему: {error_msg}\n\n'
+                'Проверьте логин и пароль в личном кабинете.'
+            )
+            await create_keyboard(event, context)
+            return
+        
+        if not cookies_dict:
+            await event.message.answer(
+                '❌ Ошибка: сессия авторизации не получена. Попробуйте позже.'
+            )
+            await create_keyboard(event, context)
+            return
+        
+        # Отменяем запись
+        async with InfoClinicaClient(
+            base_url=settings.INFOCLINICA_BASE_URL,
+            cookies=cookies_dict,
+            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+        ) as cancel_client:
+            cancel_result = await cancel_client.cancel_reservation(record_id, raise_for_status=False)
+        
+        # Проверяем результат отмены
+        # Метод cancel_reservation возвращает parsed_json, который может быть None или словарем
+        if cancel_result is not None:
+            # Если результат не None, считаем что отмена успешна
+            await event.message.answer(
+                '✅ Запись успешно отменена.'
+            )
+        else:
+            # Если результат None, возможно произошла ошибка или запись уже была отменена
+            await event.message.answer(
+                '⚠️ Не удалось отменить запись. Возможно, запись уже была отменена или произошла ошибка.\n\n'
+                'Попробуйте обновить список записей.'
+            )
+        
+    except Exception as e:
+        logging.error(f"Ошибка при отмене записи: {e}", exc_info=True)
+        await event.message.answer(
+            f'❌ Произошла ошибка при отмене записи: {str(e)[:200]}\n\nПопробуйте позже.'
+        )
+    
     await create_keyboard(event, context)
 
 

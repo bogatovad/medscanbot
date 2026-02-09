@@ -1247,5 +1247,18 @@ class InfoClinicaClient:
             json=parsed_json,
         )
 
+    async def cancel_reservation(self, reservation_id, raise_for_status: bool = False):
+        resp = await self._client_json.get(
+            f"/record/delete/{reservation_id}",
+        )
+        if raise_for_status:
+            resp.raise_for_status()
 
-    
+        parsed_json: Any | None = None
+
+        try:
+            parsed_json = resp.json()
+        except Exception:
+            parsed_json = None
+
+        return parsed_json

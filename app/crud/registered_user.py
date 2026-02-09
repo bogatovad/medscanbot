@@ -19,6 +19,16 @@ class RegisteredUserRepository:
         )
         return result.one_or_none()
 
+    async def get_by_login_and_password(self, login: str, password: str) -> RegisteredUser | None:
+        """Получить данные пользователя по логину и паролю."""
+        result = await self.session.scalars(
+            select(RegisteredUser).where(
+                RegisteredUser.cllogin == login,
+                RegisteredUser.clpassword == password
+            )
+        )
+        return result.one_or_none()
+
     async def save(
         self,
         *,
