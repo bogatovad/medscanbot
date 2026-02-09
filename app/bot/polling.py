@@ -150,12 +150,39 @@ async def handle_state_command(event: MessageCreated, context: MemoryContext):
     await event.message.answer(f"Ваше контекстное состояние: {str(data)}")
 
 
+async def _delete_messages(event, context: MemoryContext):
+    """Удаляет все сообщения, сохраненные в контексте под ключом delete_messages_id."""
+    try:
+        data = await context.get_data()
+        delete_messages_id = data.get('delete_messages_id', [])
+
+        if delete_messages_id:
+            # Если это список, обрабатываем каждый элемент
+            if isinstance(delete_messages_id, list):
+                for msg_id in delete_messages_id:
+                    try:
+                        await bot.delete_message(message_id=msg_id)
+                    except Exception as e:
+                        logging.warning(f"Не удалось удалить сообщение {msg_id}: {e}")
+            else:
+                # Если это не список, а одно значение, обрабатываем как одно сообщение
+                try:
+                    await bot.delete_message(message_id=delete_messages_id)
+                except Exception as e:
+                    logging.warning(f"Не удалось удалить сообщение {delete_messages_id}: {e}")
+            # Очищаем список ID сообщений из контекста
+            data['delete_messages_id'] = []
+            await context.set_data(data)
+    except Exception as e:
+        logging.debug(f"Ошибка при удалении сообщений: {e}")
+
+
 def _build_main_keyboard_buttons(is_registered: bool):
     """Собирает ряды кнопок главного меню. Регистрация или Личный кабинет в зависимости от is_registered."""
     builder = InlineKeyboardBuilder()
     builder.row(
         CallbackButton(
-            text='📅 Текущая запись',
+            text='📅 Текущие записи',
             payload='btn_current_appointment'
         )
     )
@@ -287,6 +314,8 @@ def parse_lk_registration_text(text: str) -> dict | None:
 async def handle_personal_cabinet(event: MessageCallback, context: MemoryContext):
     """Кнопка «Личный кабинет» — показываем данные из БД и дату регистрации."""
     await event.message.delete()
+    # Удаляем все сообщения, сохраненные для удаления
+    await _delete_messages(event, context)
     id_max = context.user_id
     logging.info(f"DSKLFGJNSDLKJFNSDKLJN!! {id_max=}")
     dsm = DatabaseSessionManager.create(settings.DB_URL)
@@ -410,6 +439,8 @@ async def handle_delete_account(event: MessageCallback, context: MemoryContext):
 async def handle_lk_registration_button(event: MessageCallback, context: MemoryContext):
     """Кнопка «Регистрация» — запрашиваем данные одним сообщением."""
     await event.message.delete()
+    # Удаляем все сообщения, сохраненные для удаления
+    await _delete_messages(event, context)
     await context.set_state(LkRegistrationForm.data)
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -508,7 +539,8 @@ async def handle_lk_registration_data(event: MessageCreated, context: MemoryCont
 async def handle_auth_button(event: MessageCallback, context: MemoryContext):
     """Кнопка «Авторизация» — запрашиваем логин и пароль (2 строки)."""
     await event.message.delete()
-    # Удаляем сообщения с записями, если они есть
+    # Удаляем все сообщения, сохраненные для удаления
+    await _delete_messages(event, context)
     await context.set_state(AuthForm.data)
     await event.message.answer(
         "🔐 Авторизация\n\n"
@@ -580,6 +612,8 @@ async def handle_auth_data(event: MessageCreated, context: MemoryContext):
 @dp.message_callback(F.callback.payload == 'btn_info')
 async def handle_info_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
+    # Удаляем все сообщения, сохраненные для удаления
+    await _delete_messages(event, context)
     
     info_text = (
         'АО «Медскан» – динамично развивающаяся группа компаний и один из лидеров '
@@ -1106,6 +1140,10 @@ async def handle_back_to_login_username(event: MessageCallback, context: MemoryC
 @dp.message_callback(F.callback.payload == 'back_to_main')
 async def handle_back_to_main(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
+    # Удаляем все сообщения, сохраненные для удаления
+    await _delete_messages(event, context)
+    # Очищаем состояние, если пользователь был в процессе регистрации или авторизации
+    await context.set_state(None)
     await create_keyboard(event, context)
 
 
@@ -1113,6 +1151,15 @@ async def handle_back_to_main(event: MessageCallback, context: MemoryContext):
 async def handle_current_appointment_button(event: MessageCallback, context: MemoryContext):
     """Показать список текущих записей на приём (от сегодня на год вперёд). Требуется регистрация и авторизация в МИС."""
     await event.message.delete()
+    # Показываем все записи
+    await _show_records(event, context)
+
+
+async def _show_records(event, context: MemoryContext):
+    """Показать все записи."""
+    # Удаляем все старые сообщения перед показом новых
+    await _delete_messages(event, context)
+    
     id_max = context.user_id
     dsm = DatabaseSessionManager.create(settings.DB_URL)
     async with dsm.get_session() as session:
@@ -1124,55 +1171,86 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
         )
         await create_keyboard(event, context)
         return
+    
     try:
-        cookies_dict = {}
-        async with InfoClinicaClient(
-            base_url=settings.INFOCLINICA_BASE_URL,
-            cookies=settings.INFOCLINICA_COOKIES,
-            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
-        ) as client:
-            result = await client.authorize_user(user.cllogin, user.clpassword)
-            if result.get('success') and client._client_json.cookies:
-                cookies_dict = dict(client._client_json.cookies)
-        if not result.get('success'):
-            error_msg = result.get('error', 'Ошибка авторизации в МИС')
-            await event.message.answer(
-                f'❌ Не удалось войти в систему записей: {error_msg}\n\n'
-                'Проверьте логин и пароль в личном кабинете.'
-            )
-            await create_keyboard(event, context)
-            return
-        if not cookies_dict:
-            await event.message.answer(
-                '❌ Ошибка: сессия авторизации не получена. Попробуйте позже.'
-            )
-            await create_keyboard(event, context)
-            return
-        today = date.today()
-        st = today.strftime('%Y%m%d')
-        en = (today + timedelta(days=365)).strftime('%Y%m%d')
-        async with InfoClinicaClient(
-            base_url=settings.INFOCLINICA_BASE_URL,
-            cookies=cookies_dict,
-            timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
-        ) as records_client:
-            list_result = await records_client.get_records_list(st=st, en=en, start=0, length=100)
-        if list_result.status_code != 200 or not list_result.json:
-            await event.message.answer(
-                '⚠️ Не удалось загрузить список записей. Попробуйте позже.'
-            )
-            await create_keyboard(event, context)
-            return
-        data = list_result.json.get('data') or []
+        # Проверяем, есть ли сохраненные данные записей в контексте
+        context_data = await context.get_data()
+        cached_data = context_data.get('records_data')
+        cached_cookies = context_data.get('records_cookies')
+        
+        # Если данных нет в кэше, загружаем их
+        if not cached_data:
+            cookies_dict = {}
+            async with InfoClinicaClient(
+                base_url=settings.INFOCLINICA_BASE_URL,
+                cookies=settings.INFOCLINICA_COOKIES,
+                timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+            ) as client:
+                result = await client.authorize_user(user.cllogin, user.clpassword)
+                if result.get('success') and client._client_json.cookies:
+                    cookies_dict = dict(client._client_json.cookies)
+            if not result.get('success'):
+                error_msg = result.get('error', 'Ошибка авторизации в МИС')
+                await event.message.answer(
+                    f'❌ Не удалось войти в систему записей: {error_msg}\n\n'
+                    'Проверьте логин и пароль в личном кабинете.'
+                )
+                await create_keyboard(event, context)
+                return
+            if not cookies_dict:
+                await event.message.answer(
+                    '❌ Ошибка: сессия авторизации не получена. Попробуйте позже.'
+                )
+                await create_keyboard(event, context)
+                return
+            
+            today = date.today()
+            st = today.strftime('%Y%m%d')
+            en = (today + timedelta(days=365)).strftime('%Y%m%d')
+            async with InfoClinicaClient(
+                base_url=settings.INFOCLINICA_BASE_URL,
+                cookies=cookies_dict,
+                timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
+            ) as records_client:
+                list_result = await records_client.get_records_list(st=st, en=en, start=0, length=100)
+            if list_result.status_code != 200 or not list_result.json:
+                await event.message.answer(
+                    '⚠️ Не удалось загрузить список записей. Попробуйте позже.'
+                )
+                await create_keyboard(event, context)
+                return
+            data = list_result.json.get('data') or []
+            # Сохраняем данные в контексте
+            await context.set_data({
+                'records_data': data,
+                'records_cookies': cookies_dict
+            })
+        else:
+            data = cached_data
+            cookies_dict = cached_cookies
+        
         if not data:
-            await event.message.answer(
+            no_records_message = await event.message.answer(
                 '📅 У вас нет записей на приём с сегодняшней даты на ближайший год.'
             )
+            # Сохраняем ID сообщения для последующего удаления
+            if no_records_message:
+                current_data = await context.get_data()
+                no_records_msg_id = None
+                if hasattr(no_records_message, 'message') and no_records_message.message:
+                    if hasattr(no_records_message.message, 'body') and no_records_message.message.body:
+                        if hasattr(no_records_message.message.body, 'mid'):
+                            no_records_msg_id = no_records_message.message.body.mid
+                if no_records_msg_id:
+                    if 'delete_messages_id' not in current_data:
+                        current_data['delete_messages_id'] = []
+                    current_data['delete_messages_id'].append(no_records_msg_id)
+                    await context.set_data(current_data)
             await create_keyboard(event, context)
             return
 
         # Сохраняем ID новых сообщений с записями
-        record_message_ids = []
+        delete_messages_id = []
 
         # Выводим каждую запись отдельным сообщением с кнопкой отмены
         for i, rec in enumerate(data, 1):
@@ -1192,6 +1270,8 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
 
             # Ищем идентификатор записи (может быть id, recordId, reservationId и т.д.)
             record_id = rec.get('id') or rec.get('recordId') or rec.get('reservationId') or rec.get('schedid') or None
+            # Получаем branch_id (filial) из данных записи
+            branch_id = rec.get('filial') or rec.get('branchId') or rec.get('branch_id') or None
 
             text = (
                 f'📅 Дата: {work_date} · Время: {start_time}\n'
@@ -1202,13 +1282,13 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
                 f'👨‍⚕️ Врач: {doc_name}\n'
             )
             
-            # Создаем кнопку отмены только если есть идентификатор записи
+            # Создаем кнопку отмены только если есть идентификатор записи и branch_id
             builder = InlineKeyboardBuilder()
-            if record_id:
+            if record_id and branch_id:
                 builder.row(
                     CallbackButton(
                         text='❌ Отменить запись',
-                        payload=f'cancel_record_{record_id}'
+                        payload=f'cancel_record_{record_id}_{branch_id}'
                     )
                 )
             
@@ -1216,45 +1296,86 @@ async def handle_current_appointment_button(event: MessageCallback, context: Mem
                 text=text,
                 attachments=[builder.as_markup()] if record_id else None
             )
-            # Сохраняем ID сообщения для последующего удаления
-            # Проверяем различные возможные атрибуты для ID сообщения
-            msg_id = None
+            # Извлекаем ID сообщения сразу после отправки
+            # В maxapi SendedMessage имеет атрибут message.body.mid
             if sent_message:
-                if hasattr(sent_message, 'id'):
-                    msg_id = sent_message.id
-                elif hasattr(sent_message, 'message_id'):
-                    msg_id = sent_message.message_id
-                elif hasattr(sent_message, 'messageId'):
-                    msg_id = sent_message.messageId
-                elif isinstance(sent_message, dict) and 'id' in sent_message:
-                    msg_id = sent_message['id']
-                elif isinstance(sent_message, dict) and 'message_id' in sent_message:
-                    msg_id = sent_message['message_id']
-            
-            if msg_id:
-                record_message_ids.append(msg_id)
+                msg_id = None
+                # Пробуем получить mid из message.body.mid
+                if hasattr(sent_message, 'message') and sent_message.message:
+                    if hasattr(sent_message.message, 'body') and sent_message.message.body:
+                        if hasattr(sent_message.message.body, 'mid'):
+                            msg_id = sent_message.message.body.mid
+                
+                if msg_id:
+                    delete_messages_id.append(msg_id)
+                    logging.info(f"Сохранен ID сообщения (mid): {msg_id}")
+                else:
+                    logging.warning(f"Не удалось извлечь mid из сообщения. Тип: {type(sent_message)}")
         
         # Сохраняем ID сообщений в контексте
-        if record_message_ids:
-            await context.set_data({'record_message_ids': record_message_ids})
+        if delete_messages_id:
+            current_data = await context.get_data()
+            if 'delete_messages_id' not in current_data:
+                current_data['delete_messages_id'] = []
+            current_data['delete_messages_id'].extend(delete_messages_id)
+            await context.set_data(current_data)
+            logging.info(f"Сохранено {len(delete_messages_id)} ID сообщений в контексте")
+        
+        # Добавляем кнопку "Назад" в главное меню
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            CallbackButton(text='🔙 Назад', payload='back_to_main')
+        )
+
+        back_message = await event.message.answer(
+            text='📄 Все Ваши записи',
+            attachments=[builder.as_markup()]
+        )
+        # Сохраняем ID сообщения с кнопкой "Назад" для последующего удаления
+        if back_message:
+            current_data = await context.get_data()
+            back_msg_id = None
+            # В maxapi SendedMessage имеет атрибут message.body.mid
+            if hasattr(back_message, 'message') and back_message.message:
+                if hasattr(back_message.message, 'body') and back_message.message.body:
+                    if hasattr(back_message.message.body, 'mid'):
+                        back_msg_id = back_message.message.body.mid
+
+            if back_msg_id:
+                if 'delete_messages_id' not in current_data:
+                    current_data['delete_messages_id'] = []
+                current_data['delete_messages_id'].append(back_msg_id)
+                await context.set_data(current_data)
+                logging.info(f"Сохранен ID сообщения с кнопкой 'Назад' (mid): {back_msg_id}")
+            else:
+                logging.warning(f"Не удалось извлечь mid из сообщения с кнопкой 'Назад'. Тип: {type(back_message)}")
     except Exception as e:
         logging.error(f"Ошибка при загрузке записей: {e}", exc_info=True)
         await event.message.answer(
             f'⚠️ Произошла ошибка при загрузке записей: {str(e)}\n\nПопробуйте позже.'
         )
-    await create_keyboard(event, context)
+        await create_keyboard(event, context)
 
 
 @dp.message_callback(F.callback.payload.startswith('cancel_record_'))
 async def handle_cancel_record_button(event: MessageCallback, context: MemoryContext):
     """Обработчик кнопки отмены записи."""
     await event.message.delete()
-    # Извлекаем ID записи из payload
+    # Извлекаем ID записи и branch_id из payload
     payload = event.callback.payload
-    record_id = payload.replace('cancel_record_', '')
+    # Формат: cancel_record_{record_id}_{branch_id}
+    parts = payload.replace('cancel_record_', '').split('_')
     
-    if not record_id:
-        await event.message.answer('❌ Ошибка: не удалось определить идентификатор записи.')
+    if len(parts) < 2:
+        await event.message.answer('❌ Ошибка: не удалось определить идентификатор записи или филиала.')
+        await create_keyboard(event, context)
+        return
+    
+    record_id = parts[0]
+    branch_id = parts[1]
+    
+    if not record_id or not branch_id:
+        await event.message.answer('❌ Ошибка: не удалось определить идентификатор записи или филиала.')
         await create_keyboard(event, context)
         return
     
@@ -1305,27 +1426,117 @@ async def handle_cancel_record_button(event: MessageCallback, context: MemoryCon
             cookies=cookies_dict,
             timeout_seconds=settings.INFOCLINICA_TIMEOUT_SECONDS,
         ) as cancel_client:
-            cancel_result = await cancel_client.cancel_reservation(record_id, raise_for_status=False)
-        
+            cancel_result = await cancel_client.cancel_reservation(record_id, branch_id, raise_for_status=False)
+
         # Проверяем результат отмены
-        # Метод cancel_reservation возвращает parsed_json, который может быть None или словарем
-        if cancel_result is not None:
-            # Если результат не None, считаем что отмена успешна
-            await event.message.answer(
-                '✅ Запись успешно отменена.'
-            )
+        if cancel_result and cancel_result.json:
+            result_json = cancel_result.json
+
+            if isinstance(result_json, dict) and result_json.get("success") is True:
+                # Отмена успешна - очищаем кэш записей, чтобы при следующем запросе загружались свежие данные
+                current_data = await context.get_data()
+                if 'records_data' in current_data:
+                    del current_data['records_data']
+                if 'records_cookies' in current_data:
+                    del current_data['records_cookies']
+                await context.set_data(current_data)
+                
+                success_message = await event.message.answer('✅ Запись успешно отменена')
+                # Сохраняем ID сообщения об успешной отмене для последующего удаления
+                # Получаем данные контекста ПОСЛЕ отправки сообщения, как для сообщения "У вас нет записей"
+                logging.info(f"[handle_cancel_record_button] Отправлено сообщение об успешной отмене: {success_message}, тип: {type(success_message)}")
+                if success_message:
+                    current_data = await context.get_data()
+                    logging.info(f"[handle_cancel_record_button] Получены данные контекста, ключи: {list(current_data.keys())}")
+                    success_msg_id = None
+                    if hasattr(success_message, 'message') and success_message.message:
+                        if hasattr(success_message.message, 'body') and success_message.message.body:
+                            if hasattr(success_message.message.body, 'mid'):
+                                success_msg_id = success_message.message.body.mid
+                                logging.info(f"[handle_cancel_record_button] Извлечен mid: {success_msg_id}")
+                    if success_msg_id:
+                        if 'delete_messages_id' not in current_data:
+                            current_data['delete_messages_id'] = []
+                        current_data['delete_messages_id'].append(success_msg_id)
+                        await context.set_data(current_data)
+                        logging.info(f"[handle_cancel_record_button] Сохранен ID сообщения об успешной отмене: {success_msg_id}, список: {current_data['delete_messages_id']}")
+                        # Проверяем, что данные действительно сохранились
+                        verify_data = await context.get_data()
+                        logging.info(f"[handle_cancel_record_button] Проверка сохранения: delete_messages_id = {verify_data.get('delete_messages_id', 'НЕ НАЙДЕНО')}")
+                    else:
+                        logging.warning("[handle_cancel_record_button] Не удалось извлечь ID из сообщения об успешной отмене")
+                        if hasattr(success_message, 'message'):
+                            logging.warning(f"[handle_cancel_record_button] success_message.message = {success_message.message}")
+                        else:
+                            logging.warning(f"[handle_cancel_record_button] success_message не имеет атрибута 'message', доступные атрибуты: {dir(success_message)}")
+            else:
+                # Отмена не удалась
+                error_msg = "Не удалось отменить запись"
+
+                if isinstance(result_json, dict):
+                    errors = result_json.get("errors", [])
+
+                    if errors and isinstance(errors, list) and len(errors) > 0:
+                        error_info = errors[0]
+                        if isinstance(error_info, dict) and error_info.get("isError") is True:
+                            error_msg = error_info.get("message", error_msg)
+                            logging.error(error_msg)
+
+                error_message = await event.message.answer(
+                    f'⚠️ {error_msg}\n\n'
+                    'Попробуйте обновить список записей.'
+                )
+                # Сохраняем ID сообщения об ошибке для последующего удаления
+                if error_message:
+                    current_data = await context.get_data()
+                    error_msg_id = None
+                    if hasattr(error_message, 'message') and error_message.message:
+                        if hasattr(error_message.message, 'body') and error_message.message.body:
+                            if hasattr(error_message.message.body, 'mid'):
+                                error_msg_id = error_message.message.body.mid
+                    if error_msg_id:
+                        if 'delete_messages_id' not in current_data:
+                            current_data['delete_messages_id'] = []
+                        current_data['delete_messages_id'].append(error_msg_id)
+                        await context.set_data(current_data)
         else:
-            # Если результат None, возможно произошла ошибка или запись уже была отменена
-            await event.message.answer(
+            # Результат не получен
+            error_message = await event.message.answer(
                 '⚠️ Не удалось отменить запись. Возможно, запись уже была отменена или произошла ошибка.\n\n'
                 'Попробуйте обновить список записей.'
             )
+            # Сохраняем ID сообщения об ошибке для последующего удаления
+            if error_message:
+                current_data = await context.get_data()
+                error_msg_id = None
+                if hasattr(error_message, 'message') and error_message.message:
+                    if hasattr(error_message.message, 'body') and error_message.message.body:
+                        if hasattr(error_message.message.body, 'mid'):
+                            error_msg_id = error_message.message.body.mid
+                if error_msg_id:
+                    if 'delete_messages_id' not in current_data:
+                        current_data['delete_messages_id'] = []
+                    current_data['delete_messages_id'].append(error_msg_id)
+                    await context.set_data(current_data)
         
     except Exception as e:
         logging.error(f"Ошибка при отмене записи: {e}", exc_info=True)
-        await event.message.answer(
+        error_message = await event.message.answer(
             f'❌ Произошла ошибка при отмене записи: {str(e)[:200]}\n\nПопробуйте позже.'
         )
+        # Сохраняем ID сообщения об ошибке для последующего удаления
+        if error_message:
+            current_data = await context.get_data()
+            error_msg_id = None
+            if hasattr(error_message, 'message') and error_message.message:
+                if hasattr(error_message.message, 'body') and error_message.message.body:
+                    if hasattr(error_message.message.body, 'mid'):
+                        error_msg_id = error_message.message.body.mid
+            if error_msg_id:
+                if 'delete_messages_id' not in current_data:
+                    current_data['delete_messages_id'] = []
+                current_data['delete_messages_id'].append(error_msg_id)
+                await context.set_data(current_data)
     
     await create_keyboard(event, context)
 
@@ -1492,6 +1703,8 @@ async def create_branches_keyboard(event, context: MemoryContext, page: int = 0)
 @dp.message_callback(F.callback.payload == 'btn_make_appointment')
 async def handle_make_appointment_button(event: MessageCallback, context: MemoryContext):
     await event.message.delete()
+    # Удаляем все сообщения, сохраненные для удаления
+    await _delete_messages(event, context)
     id_max = context.user_id
     dsm = DatabaseSessionManager.create(settings.DB_URL)
     async with dsm.get_session() as session:
