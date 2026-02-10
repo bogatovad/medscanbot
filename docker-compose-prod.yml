@@ -1,0 +1,79 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: med_scan_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-med_scan}
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: med_scan_redis
+    volumes:
+      - redis_volume:/data
+    networks:
+      - internal
+
+  backend:
+    image: med_scan_backend:1.0.0
+    container_name: med_scan_backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - internal
+    ports:
+      - "8000:8000"
+
+  bot:
+    image: med_scan_backend:1.0.0
+    command: python app/bot/polling.py
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - internal
+
+  celery_worker:
+    image: med_scan_backend:1.0.0
+    command: celery -A app.tasks worker -l info
+    volumes:
+      - ${OPENSSL_CERT_PATH}:/opt/services/app/src/dev_cert.pem:ro
+      - ${OPENSSL_KEY_PATH}:/opt/services/app/src/dev_key.pem:ro
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - internal
+
+  celery_beat:
+    image: med_scan_backend:1.0.0
+    command: celery -A app.tasks beat -l info
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  redis_volume:
+  db:
